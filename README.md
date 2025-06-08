@@ -86,22 +86,146 @@ templates/
 web_app_working.py     # Flask 主应用
 ```
 
-### 工作流程图
+### 系统架构流程图
 
 ```mermaid
-graph TD
-    A[舆情哨兵] --> B[技术诊断官]
-    B --> C[公关策略师]
-    C --> D[法务顾问]
-    D --> E[决策网关]
-    E --> F[跨部门协调官]
-    F --> G[实时舆情反馈]
-    G --> H[危机状态检查]
-    H --> I{危机是否解决?}
-    I -->|否| A
-    I -->|是| J[复盘分析师]
-    J --> K[结束]
+graph TB
+    subgraph "📡 实时监控层"
+        A[舆情哨兵<br/>Sentiment Sentinel]
+        SM[持续舆情监控<br/>Continuous Monitoring]
+    end
+    
+    subgraph "🔍 分析决策层"
+        B[技术诊断官<br/>Technical Diagnostician]
+        C[公关策略师<br/>PR Strategist]
+        D[法务顾问<br/>Legal Counsel]
+        E[决策网关<br/>Decision Gateway]
+    end
+    
+    subgraph "👑 指挥控制层"
+        HC[总指挥官<br/>Human Commander]
+        AI[AI数字分身<br/>AI Assistant]
+        CQ[指令队列<br/>Command Queue]
+    end
+    
+    subgraph "⚡ 执行协调层"
+        F[跨部门协调官<br/>Action Coordinator]
+        TE[技术部门<br/>Tech Dept]
+        PR[公关部门<br/>PR Dept]
+        LE[法务部门<br/>Legal Dept]
+        OP[运营部门<br/>Operations]
+    end
+    
+    subgraph "📊 反馈评估层"
+        G[实时舆情反馈<br/>Realtime Sentiment]
+        H[危机状态检查<br/>Status Check]
+        PM[复盘分析师<br/>Post-mortem Analyst]
+        MEM[记忆学习<br/>Memory System]
+    end
+    
+    %% 主流程
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    
+    %% 决策分支
+    E -.->|等待20秒| AI
+    HC -->|立即指令| CQ
+    AI -->|超时接管| E
+    E --> F
+    
+    %% 执行阶段
+    F -->|并发执行| TE
+    F -->|并发执行| PR
+    F -->|并发执行| LE
+    F -->|并发执行| OP
+    
+    %% 反馈循环
+    TE --> G
+    PR --> G
+    LE --> G
+    OP --> G
+    G --> H
+    
+    %% 循环或结束
+    H -->|危机未解决| A
+    H -->|危机已解决| PM
+    PM --> MEM
+    
+    %% 持续监控
+    SM -.->|30秒周期| G
+    SM -.->|事件触发| G
+    
+    %% 随时介入
+    HC -.->|随时下达| CQ
+    CQ -.->|立即处理| F
+    
+    %% 批准机制
+    TE -.->|请求批准| HC
+    PR -.->|请求批准| HC
+    LE -.->|请求批准| HC
+    OP -.->|请求批准| HC
+    
+    classDef monitoring fill:#e1f5fe
+    classDef analysis fill:#f3e5f5
+    classDef command fill:#fff3e0
+    classDef execution fill:#e8f5e8
+    classDef feedback fill:#fce4ec
+    
+    class A,SM monitoring
+    class B,C,D,E analysis
+    class HC,AI,CQ command
+    class F,TE,PR,LE,OP execution
+    class G,H,PM,MEM feedback
 ```
+
+### 双模式运行架构
+
+```mermaid
+graph LR
+    subgraph "🛡️ 神盾系统启动"
+        START[系统启动]
+    end
+    
+    subgraph "🔧 模式检测"
+        CHECK{LangGraph可用?}
+    end
+    
+    subgraph "🔥 真实模式"
+        REAL[LangGraph + DeepSeek API]
+        REAL_FLOW[完整AI工作流]
+    end
+    
+    subgraph "🎭 演示模式"
+        DEMO[模拟数据系统]
+        DEMO_FLOW[演示工作流]
+    end
+    
+    subgraph "📡 Web控制台"
+        WEB[Flask + SocketIO]
+        UI[实时监控界面]
+    end
+    
+    START --> CHECK
+    CHECK -->|是| REAL
+    CHECK -->|否| DEMO
+    REAL --> REAL_FLOW
+    DEMO --> DEMO_FLOW
+    REAL_FLOW --> WEB
+    DEMO_FLOW --> WEB
+    WEB --> UI
+```
+
+### 关键特性说明
+
+- **🔄 循环处理**：危机未解决时系统会自动进入下一轮处理
+- **⚡ 立即响应**：总指挥官可随时下达指令，立即执行不中断主流程
+- **🤖 AI接管**：20秒无人类响应时AI数字分身自动接管决策
+- **📊 持续监控**：舆情监控线程30秒周期更新或事件触发更新
+- **✅ 批准机制**：关键行动需要总指挥官批准，支持超时自动批准
+- **🧠 学习记忆**：每次危机处理结果都会被记录用于未来参考
+- **🎯 并发执行**：多个部门可以同时执行不同任务提高效率
 
 ## 🎮 使用指南
 
