@@ -1,0 +1,1168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>神盾危机管理系统 - 中控大屏</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #0c1445 0%, #1a237e 50%, #283593 100%);
+            color: #ffffff;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px 30px;
+            text-align: center;
+            border-bottom: 2px solid #3f51b5;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: bold;
+            text-shadow: 0 0 10px rgba(63, 81, 181, 0.8);
+        }
+
+        .main-container {
+            display: flex;
+            height: calc(100vh - 80px - 120px); /* 为聊天容器留出更多空间 */
+        }
+
+        .graph-container {
+            flex: 1.5; /* 减少图形区域比例，给右侧面板更多空间 */
+            position: relative;
+            padding: 20px 20px 60px 20px; /* 增加底部padding，避免遮挡 */
+            overflow: hidden;
+        }
+
+        .graph-svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        .connection-line {
+            stroke: #3f51b5;
+            stroke-width: 2;
+            fill: none;
+            opacity: 0.6;
+            transition: all 0.3s ease;
+        }
+
+        .connection-line.active {
+            stroke: #2196f3;
+            stroke-width: 3;
+            opacity: 1;
+            animation: flow 2s infinite;
+        }
+
+        @keyframes flow {
+            0% { stroke-dasharray: 0, 10; }
+            100% { stroke-dasharray: 10, 0; }
+        }
+
+        .agent-node {
+            position: absolute;
+            width: 130px; /* 稍微减小宽度 */
+            height: 90px; /* 稍微减小高度 */
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid #3f51b5;
+            border-radius: 12px;
+            padding: 8px;
+            text-align: center;
+            transition: all 0.3s ease;
+            z-index: 2;
+            backdrop-filter: blur(10px);
+            margin-bottom: 10px; /* 确保底部有间距 */
+        }
+
+        .agent-node.active {
+            border-color: #2196f3;
+            box-shadow: 0 0 20px rgba(33, 150, 243, 0.5);
+            transform: scale(1.05);
+        }
+
+        .agent-node.completed {
+            border-color: #4caf50;
+            box-shadow: 0 0 20px rgba(76, 175, 80, 0.5);
+        }
+
+        .agent-node.waiting {
+            border-color: #ff9800;
+            box-shadow: 0 0 20px rgba(255, 152, 0, 0.5);
+        }
+
+        .agent-node::before {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            background: linear-gradient(45deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+            border-radius: 12px;
+            opacity: 0;
+            transition: opacity 0.6s;
+            z-index: -1;
+        }
+
+        .agent-node.active::before {
+            animation: pulse-glow 2s infinite;
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 0; }
+            50% { opacity: 1; }
+        }
+
+        .agent-name {
+            font-size: 11px;
+            font-weight: bold;
+            margin-bottom: 4px;
+            color: #e3f2fd;
+            line-height: 1.1;
+        }
+
+        .agent-status {
+            font-size: 9px;
+            padding: 2px 5px;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.3);
+            margin-bottom: 4px;
+        }
+
+        .agent-message {
+            font-size: 8px;
+            color: #b3e5fc;
+            line-height: 1.1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+
+        /* 重新调整智能体位置 - 避免连接线被遮挡，整体上移并优化间距 */
+        #sentiment_sentinel { top: 20px; left: 280px; }
+        #technical_diagnostician { top: 140px; left: 120px; }
+        #pr_strategist { top: 140px; left: 280px; }
+        #legal_counsel { top: 140px; left: 440px; }
+        #decision_gateway { top: 260px; left: 280px; }
+        #action_coordinator { top: 380px; left: 280px; }
+        #status_check { top: 500px; left: 150px; }
+        #post_mortem_analyst { top: 500px; left: 410px; }
+
+        .info-panel {
+            flex: 1.5; /* 增加右侧面板比例 */
+            background: rgba(0, 0, 0, 0.2);
+            border-left: 2px solid #3f51b5;
+            padding: 15px;
+            overflow-y: auto;
+            max-height: calc(100vh - 80px - 120px);
+        }
+
+        .info-section {
+            margin-bottom: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 12px;
+            border-left: 4px solid #3f51b5;
+        }
+
+        .info-title {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #64b5f6;
+        }
+
+        .info-content {
+            font-size: 12px;
+            line-height: 1.4;
+            color: #e1f5fe;
+            white-space: pre-wrap;
+            max-height: 300px; /* 限制最大高度，避免过长内容 */
+            overflow-y: auto;
+        }
+
+        /* 为不同类型的信息添加特殊样式 */
+        .info-section.alert { border-left-color: #f44336; }
+        .info-section.technical { border-left-color: #2196f3; }
+        .info-section.pr { border-left-color: #4caf50; }
+        .info-section.legal { border-left-color: #ff9800; }
+        .info-section.proposal { border-left-color: #9c27b0; }
+        .info-section.task-distribution { border-left-color: #ff9800; }
+        .info-section.department-execution { border-left-color: #4caf50; }
+        .info-section.sentiment { border-left-color: #e91e63; }
+        .info-section.post-mortem { border-left-color: #607d8b; }
+        .info-section.approval { border-left-color: #ff5722; }
+
+        /* 批准请求样式 */
+        .approval-request {
+            background: rgba(255, 87, 34, 0.1);
+            border: 1px solid #ff5722;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            animation: pulse-approval 2s infinite;
+        }
+
+        @keyframes pulse-approval {
+            0%, 100% { box-shadow: 0 0 5px rgba(255, 87, 34, 0.3); }
+            50% { box-shadow: 0 0 15px rgba(255, 87, 34, 0.6); }
+        }
+
+        .approval-agent {
+            font-weight: bold;
+            color: #ff7043;
+            margin-bottom: 5px;
+        }
+
+        .approval-action {
+            color: #ffccbc;
+            margin-bottom: 8px;
+            font-size: 11px;
+        }
+
+        .approval-explanation {
+            color: #fff3e0;
+            margin-bottom: 10px;
+            font-style: italic;
+            font-size: 12px;
+        }
+
+        .approval-buttons {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+        }
+
+        .approval-btn {
+            padding: 6px 15px;
+            border: none;
+            border-radius: 15px;
+            font-size: 11px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .approval-btn.approve {
+            background: linear-gradient(45deg, #4caf50, #66bb6a);
+            color: white;
+        }
+
+        .approval-btn.reject {
+            background: linear-gradient(45deg, #f44336, #ef5350);
+            color: white;
+        }
+
+        .approval-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        .approval-status {
+            text-align: center;
+            padding: 5px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .approval-status.approved {
+            background: rgba(76, 175, 80, 0.3);
+            color: #4caf50;
+        }
+
+        .approval-status.rejected {
+            background: rgba(244, 67, 54, 0.3);
+            color: #f44336;
+        }
+
+        .chat-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 120px; /* 从100px增加到120px */
+            background: rgba(0, 0, 0, 0.9);
+            border-top: 2px solid #3f51b5;
+            padding: 20px 15px; /* 增加垂直padding */
+            z-index: 100;
+            backdrop-filter: blur(10px);
+        }
+
+        .chat-input-container {
+            display: flex;
+            gap: 10px;
+            max-width: 1200px;
+            margin: 0 auto;
+            align-items: center;
+            height: 100%;
+        }
+
+        .chat-input {
+            flex: 1;
+            padding: 12px 15px;
+            border: 2px solid #3f51b5;
+            border-radius: 25px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            font-size: 14px;
+            outline: none;
+            height: 50px;
+        }
+
+        .chat-input::placeholder {
+            color: #b3e5fc;
+        }
+
+        .chat-input:focus {
+            border-color: #2196f3;
+            box-shadow: 0 0 10px rgba(33, 150, 243, 0.3);
+        }
+
+        .send-btn, .start-btn, .stop-btn {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 25px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            height: 50px;
+            min-width: 120px;
+            white-space: nowrap;
+        }
+
+        .send-btn, .start-btn {
+            background: linear-gradient(45deg, #3f51b5, #2196f3);
+        }
+
+        .stop-btn {
+            background: linear-gradient(45deg, #f44336, #ef5350);
+        }
+
+        .send-btn:hover, .start-btn:hover {
+            background: linear-gradient(45deg, #2196f3, #3f51b5);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(33, 150, 243, 0.4);
+        }
+
+        .stop-btn:hover:not(:disabled) {
+            background: linear-gradient(45deg, #ef5350, #f44336);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(244, 67, 54, 0.4);
+        }
+
+        .send-btn:disabled, .start-btn:disabled, .stop-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+        }
+
+        .modal-content {
+            background: linear-gradient(135deg, #1a237e, #283593);
+            margin: 15% auto;
+            padding: 30px;
+            border: 2px solid #3f51b5;
+            border-radius: 15px;
+            width: 80%;
+            max-width: 500px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal h3 {
+            margin-bottom: 20px;
+            color: #64b5f6;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+
+        .modal-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .modal-btn.yes {
+            background: linear-gradient(45deg, #4caf50, #66bb6a);
+            color: white;
+        }
+
+        .modal-btn.no {
+            background: linear-gradient(45deg, #f44336, #ef5350);
+            color: white;
+        }
+
+        .modal-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+
+        /* 滚动条样式 */
+        .info-panel::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .info-panel::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+
+        .info-panel::-webkit-scrollbar-thumb {
+            background: rgba(63, 81, 181, 0.6);
+            border-radius: 4px;
+        }
+
+        .info-panel::-webkit-scrollbar-thumb:hover {
+            background: rgba(63, 81, 181, 0.8);
+        }
+
+        /* 任务分发和部门执行状态的特殊样式 */
+        .task-distribution {
+            border-left-color: #ff9800;
+        }
+
+        .department-execution {
+            border-left-color: #4caf50;
+        }
+
+        .execution-item {
+            margin-bottom: 10px;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+        }
+
+        .execution-status {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-left: 5px;
+        }
+
+        .status-executing {
+            background: rgba(33, 150, 243, 0.3);
+            color: #2196f3;
+        }
+
+        .status-completed {
+            background: rgba(76, 175, 80, 0.3);
+            color: #4caf50;
+        }
+
+        .status-pending {
+            background: rgba(255, 152, 0, 0.3);
+            color: #ff9800;
+        }
+
+        /* 通知动画 */
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 1200px) {
+            .agent-node {
+                width: 120px;
+                height: 90px;
+                font-size: 11px;
+            }
+            
+            .agent-name {
+                font-size: 11px;
+            }
+            
+            .agent-status {
+                font-size: 9px;
+            }
+            
+            .agent-message {
+                font-size: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🛡️ 神盾危机管理系统 - 中控大屏</h1>
+    </div>
+
+    <div class="main-container">
+        <div class="graph-container">
+            <!-- SVG连接线 -->
+            <svg class="graph-svg">
+                <!-- 更新连接线路径以匹配新的智能体位置 -->
+                <path class="connection-line" id="line-1" d="M 345,65 Q 345,100 190,140"></path> <!-- Sentiment to Tech -->
+                <path class="connection-line" id="line-2" d="M 185,185 H 280"></path> <!-- Tech to PR -->
+                <path class="connection-line" id="line-3" d="M 345,185 H 440"></path> <!-- PR to Legal -->
+                <path class="connection-line" id="line-4" d="M 190,185 Q 235,220 345,260"></path> <!-- Tech to Gateway -->
+                <path class="connection-line" id="line-5" d="M 505,185 Q 425,220 345,260"></path> <!-- Legal to Gateway -->
+                <path class="connection-line" id="line-6" d="M 345,305 V 380"></path> <!-- Gateway to Coordinator -->
+                <path class="connection-line" id="line-7" d="M 345,425 Q 250,460 215,500"></path> <!-- Coordinator to Status Check -->
+                <path class="connection-line" id="line-8" d="M 215,545 H 410"></path> <!-- Status Check to Post Mortem -->
+                <path class="connection-line" id="line-9" d="M 215,500 Q 50,400 50,65 Q 50,20 280,20"></path> <!-- Loop back to Sentiment -->
+            </svg>
+
+            <!-- 智能体节点 -->
+            <div class="agent-node" id="sentiment_sentinel">
+                <div class="agent-name">📈 舆情哨兵</div>
+                <div class="agent-status">待机</div>
+                <div class="agent-message"></div>
+            </div>
+            
+            <div class="agent-node" id="technical_diagnostician">
+                <div class="agent-name">🔧 首席技术诊断官</div>
+                <div class="agent-status">待机</div>
+                <div class="agent-message"></div>
+            </div>
+            
+            <div class="agent-node" id="pr_strategist">
+                <div class="agent-name">📢 公关策略师</div>
+                <div class="agent-status">待机</div>
+                <div class="agent-message"></div>
+            </div>
+            
+            <div class="agent-node" id="legal_counsel">
+                <div class="agent-name">⚖️ 法务与合规顾问</div>
+                <div class="agent-status">待机</div>
+                <div class="agent-message"></div>
+            </div>
+            
+            <div class="agent-node" id="decision_gateway">
+                <div class="agent-name">👑 决策中心 (人类/AI分身)</div>
+                <div class="agent-status">待机</div>
+                <div class="agent-message"></div>
+            </div>
+            
+            <div class="agent-node" id="action_coordinator">
+                <div class="agent-name">🎯 跨部门行动协调官</div>
+                <div class="agent-status">待机</div>
+                <div class="agent-message"></div>
+            </div>
+            
+            <div class="agent-node" id="status_check">
+                <div class="agent-name">✅ 危机状态检查</div>
+                <div class="agent-status">待机</div>
+                <div class="agent-message"></div>
+            </div>
+            
+            <div class="agent-node" id="post_mortem_analyst">
+                <div class="agent-name">📝 复盘分析师</div>
+                <div class="agent-status">待机</div>
+                <div class="agent-message"></div>
+            </div>
+        </div>
+
+        <div class="info-panel">
+            <div class="info-section alert" id="alert-section" style="display: none;">
+                <div class="info-title">🚨 危机警报</div>
+                <div class="info-content" id="alert-content"></div>
+            </div>
+            
+            <div class="info-section technical" id="technical-report-section" style="display: none;">
+                <div class="info-title">🔧 技术诊断报告</div>
+                <div class="info-content" id="technical-report-content"></div>
+            </div>
+            
+            <div class="info-section pr" id="pr-strategy-section" style="display: none;">
+                <div class="info-title">📢 公关策略方案</div>
+                <div class="info-content" id="pr-strategy-content"></div>
+            </div>
+            
+            <div class="info-section legal" id="legal-review-section" style="display: none;">
+                <div class="info-title">⚖️ 法律风险评估</div>
+                <div class="info-content" id="legal-review-content"></div>
+            </div>
+            
+            <div class="info-section proposal" id="comprehensive-proposal-section" style="display: none;">
+                <div class="info-title">📋 综合处理方案</div>
+                <div class="info-content" id="comprehensive-proposal-content"></div>
+            </div>
+
+            <div class="info-section approval" id="approval-requests-section" style="display: none;">
+                <div class="info-title">🔔 智能体行动批准请求</div>
+                <div class="info-content" id="approval-requests-content"></div>
+            </div>
+
+            <div class="info-section task-distribution" id="task-distribution-section" style="display: none;">
+                <div class="info-title">📋 任务分发状态</div>
+                <div class="info-content" id="task-distribution-content"></div>
+            </div>
+
+            <div class="info-section department-execution" id="department-execution-section" style="display: none;">
+                <div class="info-title">🎯 各部门执行状态</div>
+                <div class="info-content" id="department-execution-content"></div>
+            </div>
+            
+            <div class="info-section sentiment" id="realtime-sentiment-section" style="display: none;">
+                <div class="info-title">📊 实时舆情反馈</div>
+                <div class="info-content" id="realtime-sentiment-content"></div>
+            </div>
+
+            <div class="info-section" id="human-decision-section" style="display: none;">
+                <div class="info-title">👑 指挥官决策</div>
+                <div class="info-content" id="human-decision-content"></div>
+            </div>
+
+            <div class="info-section" id="parsed-tasks-section" style="display: none;">
+                <div class="info-title">🎯 解析后任务</div>
+                <div class="info-content" id="parsed-tasks-content"></div>
+            </div>
+
+            <div class="info-section" id="executed-actions-section" style="display: none;">
+                <div class="info-title">⚡ 执行结果</div>
+                <div class="info-content" id="executed-actions-content"></div>
+            </div>
+
+            <div class="info-section" id="incident-log-section" style="display: none;">
+                <div class="info-title">📋 事件日志</div>
+                <div class="info-content" id="incident-log-content"></div>
+            </div>
+            
+            <div class="info-section post-mortem" id="post-mortem-report-section" style="display: none;">
+                <div class="info-title">📝 复盘分析报告</div>
+                <div class="info-content" id="post-mortem-report-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="chat-container">
+        <div class="chat-input-container">
+            <button class="start-btn" onclick="startSystem()">🚀 启动神盾系统</button>
+            <button class="stop-btn" onclick="stopSystem()" disabled>🛑 停止系统</button>
+            <input type="text" class="chat-input" id="commandInput" placeholder="系统未启动" disabled>
+            <button class="send-btn" onclick="sendCommand()" disabled id="sendBtn">发送指令</button>
+        </div>
+    </div>
+
+    <!-- 危机状态确认弹窗 -->
+    <div id="crisisModal" class="modal">
+        <div class="modal-content">
+            <h3>🔍 危机状态确认</h3>
+            <p>当前危机是否已经解决？</p>
+            <div class="modal-buttons">
+                <button class="modal-btn yes" onclick="confirmCrisisStatus(true)">✅ 已解决</button>
+                <button class="modal-btn no" onclick="confirmCrisisStatus(false)">❌ 未解决</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let commandInputEnabled = false;
+
+        // 连接线映射 - 定义哪些连接线对应哪些智能体
+        const connectionMap = {
+            'sentiment_sentinel': ['line-1'], // To tech diagnostician
+            'technical_diagnostician': ['line-2'], // To PR
+            'pr_strategist': ['line-3'], // To Legal
+            'legal_counsel': ['line-4'], // To Gateway
+            'decision_gateway': ['line-5'], // To Coordinator
+            'action_coordinator': ['line-6', 'line-7'], // To crisis check and BACK to sentiment
+            'status_check': ['line-8', 'line-9'], // To post-mortem or loop back to tech
+            'post_mortem_analyst': []
+        };
+
+        // 连接事件
+        socket.on('connect', function() {
+            console.log('🔗 已连接到神盾系统');
+        });
+
+        socket.on('connected', function(data) {
+            console.log('✅ 连接确认:', data.data);
+        });
+
+        // 系统启动事件
+        socket.on('system_started', function(data) {
+            console.log('🚀 系统启动:', data.message);
+            document.querySelector('.start-btn').disabled = true;
+            document.querySelector('.start-btn').textContent = '系统运行中...';
+            document.querySelector('.stop-btn').disabled = false;
+            // 启用随时指令输入
+            enableCommandInput();
+        });
+
+        // 智能体状态更新
+        socket.on('agent_status_update', function(data) {
+            console.log('🔄 智能体状态更新:', data);
+            updateAgentStatus(data.agent, data.status, data.color, data.message);
+        });
+
+        // 系统信息更新
+        socket.on('system_info_update', function(data) {
+            console.log('📊 系统信息更新:', data.type);
+            updateSystemInfo(data.type, data.content);
+        });
+
+        // 危机状态检查
+        socket.on('crisis_status_check', function(data) {
+            console.log('🔍 危机状态检查:', data.message);
+            document.getElementById('crisisModal').style.display = 'block';
+        });
+
+        // 指令接收确认
+        socket.on('command_received', function(data) {
+            console.log('📨 指令已接收:', data.message);
+            document.getElementById('commandInput').value = '';
+            // 立即处理模式下，保持输入框启用状态
+            if (data.message.includes('立即处理')) {
+                // 短暂禁用后重新启用，给用户反馈
+                document.getElementById('commandInput').disabled = true;
+                document.getElementById('sendBtn').disabled = true;
+                setTimeout(() => {
+                    enableCommandInput();
+                }, 1000);
+            } else {
+                // 流程中处理，禁用输入框
+                document.getElementById('commandInput').disabled = true;
+                document.getElementById('sendBtn').disabled = true;
+            }
+        });
+
+        // 指令处理完成
+        socket.on('command_processed', function(data) {
+            console.log('✅ 指令处理完成:', data);
+            // 显示处理结果通知
+            showNotification(`指令处理完成: ${data.command} (${data.tasks_count}项任务) - ${data.timestamp}`);
+        });
+
+        // 批准请求更新
+        socket.on('approval_requests_update', function(data) {
+            console.log('🔔 批准请求更新:', data.requests);
+            updateApprovalRequests(data.requests);
+        });
+
+        // 批准请求通知
+        socket.on('approval_request', function(data) {
+            console.log('🔔 新的批准请求:', data);
+            showNotification(`${data.agent} 请求行动批准: ${data.explanation}`);
+        });
+
+        // 批准决策确认
+        socket.on('approval_decision_received', function(data) {
+            console.log('📋 批准决策已接收:', data);
+            showNotification(data.message);
+        });
+
+        // 系统完成
+        socket.on('system_completed', function(data) {
+            console.log('✅ 系统执行完成:', data.message);
+            resetSystem();
+        });
+
+        // 系统停止
+        socket.on('system_stopped', function(data) {
+            console.log('🛑 系统已停止:', data.message);
+            resetSystem();
+        });
+
+        // 系统错误
+        socket.on('system_error', function(data) {
+            console.error('❌ 系统错误:', data.error);
+            alert('系统执行出错: ' + data.error);
+            resetSystem();
+        });
+
+        function startSystem() {
+            console.log('🚀 启动神盾系统...');
+            socket.emit('start_system');
+        }
+
+        function stopSystem() {
+            console.log('🛑 停止神盾系统...');
+            socket.emit('stop_system');
+        }
+
+        function showNotification(message) {
+            // 创建通知元素
+            const notification = document.createElement('div');
+            notification.className = 'notification';
+            notification.textContent = message;
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: rgba(76, 175, 80, 0.9);
+                color: white;
+                padding: 12px 20px;
+                border-radius: 8px;
+                z-index: 9999;
+                font-size: 14px;
+                max-width: 400px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                animation: slideIn 0.3s ease-out;
+            `;
+            
+            document.body.appendChild(notification);
+            
+            // 3秒后自动移除
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease-in';
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
+                }, 300);
+            }, 3000);
+        }
+
+        function updateAgentStatus(agentName, status, color, message) {
+            const agentNode = document.getElementById(agentName);
+            if (agentNode) {
+                const statusElement = agentNode.querySelector('.agent-status');
+                const messageElement = agentNode.querySelector('.agent-message');
+                
+                statusElement.textContent = status;
+                messageElement.textContent = message;
+                
+                // 移除所有状态类
+                agentNode.classList.remove('active', 'completed', 'waiting');
+                
+                // 添加对应的状态类
+                if (color === 'blue') {
+                    agentNode.classList.add('active');
+                    // 激活相关连接线
+                    activateConnectionLines(agentName, true);
+                } else if (color === 'green') {
+                    // 绿色状态：闪动2秒后恢复待机
+                    agentNode.classList.add('completed');
+                    // 取消激活连接线
+                    activateConnectionLines(agentName, false);
+                    
+                    // 2秒后自动恢复到待机状态
+                    setTimeout(() => {
+                        agentNode.classList.remove('completed');
+                        statusElement.textContent = '待机';
+                        messageElement.textContent = '';
+                        console.log(`🔄 ${agentName} 自动恢复到待机状态`);
+                    }, 2000);
+                    
+                } else if (color === 'orange') {
+                    agentNode.classList.add('waiting');
+                    
+                    // 如果是人类决策网关等待指令，启用输入框
+                    if (agentName === 'decision_gateway' && status === '等待指令') {
+                        enableCommandInput();
+                    }
+                    
+                    // 橙色状态不自动恢复，需要用户交互或系统推进
+                    
+                } else {
+                    // 灰色状态，取消激活连接线
+                    activateConnectionLines(agentName, false);
+                }
+            }
+        }
+
+        function activateConnectionLines(agentName, activate) {
+            const lines = connectionMap[agentName];
+            if (lines) {
+                lines.forEach(lineId => {
+                    const line = document.getElementById(lineId);
+                    if (line) {
+                        if (activate) {
+                            line.classList.add('active');
+                        } else {
+                            line.classList.remove('active');
+                        }
+                    }
+                });
+            }
+        }
+
+        function updateSystemInfo(type, content) {
+            const sectionMap = {
+                'alert': 'alert-section',
+                'technical_report': 'technical-report-section',
+                'pr_strategy': 'pr-strategy-section',
+                'pr_drafts': 'pr-strategy-section', // 兼容旧名称
+                'legal_review': 'legal-review-section',
+                'comprehensive_proposal': 'comprehensive-proposal-section',
+                'approval_requests': 'approval-requests-section', // 新增
+                'task_distribution': 'task-distribution-section',
+                'department_execution': 'department-execution-section',
+                'realtime_sentiment': 'realtime-sentiment-section',
+                'human_decision': 'human-decision-section',
+                'parsed_tasks': 'parsed-tasks-section',
+                'executed_actions': 'executed-actions-section',
+                'incident_log': 'incident-log-section',
+                'post_mortem_report': 'post-mortem-report-section'
+            };
+
+            const sectionId = sectionMap[type];
+            if (sectionId) {
+                const section = document.getElementById(sectionId);
+                const contentElement = document.getElementById(sectionId.replace('-section', '-content'));
+                
+                if (section && contentElement) {
+                    section.style.display = 'block';
+                    
+                    // 根据内容类型进行特殊格式化
+                    let formattedContent = '';
+                    
+                    if (type === 'approval_requests') {
+                        // 特殊处理批准请求，不在这里处理，由专门的函数处理
+                        return;
+                    } else if (type === 'pr_strategy' || type === 'pr_drafts') {
+                        // 处理公关策略（可能是JSON格式）
+                        if (typeof content === 'object') {
+                            if (content.sincere || content.reassuring || content.deflecting) {
+                                // 新格式：包含详细策略
+                                formattedContent = `坦诚策略:\n${JSON.stringify(content.sincere, null, 2)}\n\n`;
+                                formattedContent += `安抚策略:\n${JSON.stringify(content.reassuring, null, 2)}\n\n`;
+                                formattedContent += `拖延策略:\n${JSON.stringify(content.deflecting, null, 2)}`;
+                            } else {
+                                formattedContent = JSON.stringify(content, null, 2);
+                            }
+                        } else if (Array.isArray(content)) {
+                            // 旧格式：数组形式
+                            content.forEach((draft, index) => {
+                                formattedContent += `方案${index + 1} (${draft.tone}):\n${draft.draft}\n\n`;
+                            });
+                        } else {
+                            formattedContent = content;
+                        }
+                    } else if (type === 'parsed_tasks') {
+                        // 处理解析后的任务
+                        if (typeof content === 'object' && content.tasks) {
+                            formattedContent = '任务分配:\n';
+                            content.tasks.forEach((task, index) => {
+                                formattedContent += `${index + 1}. ${task.dept}: ${task.action}\n\n`;
+                            });
+                        } else {
+                            formattedContent = JSON.stringify(content, null, 2);
+                        }
+                    } else if (type === 'executed_actions') {
+                        // 处理执行结果
+                        if (typeof content === 'object') {
+                            formattedContent = '执行结果:\n';
+                            Object.entries(content).forEach(([dept, result]) => {
+                                formattedContent += `${dept}:\n${result}\n\n`;
+                            });
+                        } else {
+                            formattedContent = content;
+                        }
+                    } else if (type === 'incident_log') {
+                        // 处理事件日志
+                        if (Array.isArray(content)) {
+                            formattedContent = content.join('\n\n');
+                        } else {
+                            formattedContent = content;
+                        }
+                    } else {
+                        // 默认处理
+                        if (typeof content === 'object') {
+                            formattedContent = JSON.stringify(content, null, 2);
+                        } else {
+                            formattedContent = content;
+                        }
+                    }
+                    
+                    contentElement.textContent = formattedContent;
+                    
+                    // 滚动到新内容
+                    section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            }
+        }
+
+        function enableCommandInput() {
+            commandInputEnabled = true;
+            document.getElementById('commandInput').disabled = false;
+            document.getElementById('sendBtn').disabled = false;
+            document.getElementById('commandInput').placeholder = '总指挥官，请下达指令...（随时可输入）';
+            // 不自动聚焦，避免干扰用户操作
+        }
+
+        function sendCommand() {
+            const input = document.getElementById('commandInput');
+            const command = input.value.trim();
+            
+            if (command && commandInputEnabled) {
+                console.log('📤 发送指令:', command);
+                socket.emit('human_command', { command: command });
+                commandInputEnabled = false;
+            }
+        }
+
+        function confirmCrisisStatus(resolved) {
+            console.log('📋 确认危机状态:', resolved ? '已解决' : '未解决');
+            socket.emit('crisis_decision', { resolved: resolved });
+            document.getElementById('crisisModal').style.display = 'none';
+        }
+
+        function updateApprovalRequests(requests) {
+            const section = document.getElementById('approval-requests-section');
+            const contentElement = document.getElementById('approval-requests-content');
+            
+            if (!requests || requests.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+            
+            // 智能体名称映射
+            const agentNameMap = {
+                'sentiment_sentinel': '📈 舆情哨兵',
+                'technical_diagnostician': '🔧 首席技术诊断官',
+                'pr_strategist': '📢 公关策略师',
+                'legal_counsel': '⚖️ 法务与合规顾问',
+                'decision_gateway': '👑 决策中心',
+                'action_coordinator': '🎯 跨部门行动协调官',
+                'status_check': '✅ 危机状态检查',
+                'post_mortem_analyst': '📝 复盘分析师'
+            };
+            
+            section.style.display = 'block';
+            contentElement.innerHTML = '';
+            
+            requests.forEach((request, index) => {
+                const requestDiv = document.createElement('div');
+                requestDiv.className = 'approval-request';
+                
+                let statusHtml = '';
+                if (request.status === 'pending') {
+                    statusHtml = `
+                        <div class="approval-buttons">
+                            <button class="approval-btn approve" onclick="approveAction('${request.agent}')">
+                                ✅ 批准
+                            </button>
+                            <button class="approval-btn reject" onclick="rejectAction('${request.agent}')">
+                                ❌ 拒绝
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    const statusClass = request.status === 'approved' ? 'approved' : 'rejected';
+                    const statusText = request.status === 'approved' ? '✅ 已批准' : '❌ 已拒绝';
+                    statusHtml = `<div class="approval-status ${statusClass}">${statusText}</div>`;
+                }
+                
+                const friendlyName = agentNameMap[request.agent] || request.agent;
+                
+                requestDiv.innerHTML = `
+                    <div class="approval-agent">${friendlyName}</div>
+                    <div class="approval-action">📋 ${request.action}</div>
+                    <div class="approval-explanation">"${request.explanation}"</div>
+                    ${statusHtml}
+                `;
+                
+                contentElement.appendChild(requestDiv);
+            });
+            
+            // 滚动到批准请求区域
+            section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function approveAction(agentName) {
+            console.log('✅ 批准行动:', agentName);
+            socket.emit('approval_decision', { 
+                agent_name: agentName, 
+                approved: true 
+            });
+        }
+
+        function rejectAction(agentName) {
+            console.log('❌ 拒绝行动:', agentName);
+            socket.emit('approval_decision', { 
+                agent_name: agentName, 
+                approved: false 
+            });
+        }
+
+        function resetSystem() {
+            document.querySelector('.start-btn').disabled = false;
+            document.querySelector('.start-btn').textContent = '🚀 启动神盾系统';
+            document.querySelector('.stop-btn').disabled = true;
+            document.getElementById('commandInput').disabled = true;
+            document.getElementById('sendBtn').disabled = true;
+            document.getElementById('commandInput').placeholder = '系统未启动';
+            commandInputEnabled = false;
+            
+            // 重置所有连接线
+            document.querySelectorAll('.connection-line').forEach(line => {
+                line.classList.remove('active');
+            });
+            
+            // 重置所有智能体到待机状态（清除任何定时器效果）
+            document.querySelectorAll('.agent-node').forEach(node => {
+                node.classList.remove('active', 'completed', 'waiting');
+                const statusElement = node.querySelector('.agent-status');
+                const messageElement = node.querySelector('.agent-message');
+                if (statusElement) statusElement.textContent = '待机';
+                if (messageElement) messageElement.textContent = '';
+            });
+        }
+
+        // 回车键发送指令
+        document.getElementById('commandInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !document.getElementById('sendBtn').disabled) {
+                sendCommand();
+            }
+        });
+
+        // 点击模态框外部关闭
+        window.onclick = function(event) {
+            const modal = document.getElementById('crisisModal');
+            if (event.target === modal) {
+                modal.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html> 

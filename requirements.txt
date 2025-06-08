@@ -1,0 +1,10 @@
+langchain==0.3.25
+langchain-core>=0.3.58
+langchain-openai==0.2.10
+langgraph==0.2.55
+python-dotenv==1.0.0
+Flask==3.0.3
+Flask-SocketIO==5.3.6
+python-socketio==5.11.0
+eventlet==0.35.2
+Werkzeug==3.0.1 
