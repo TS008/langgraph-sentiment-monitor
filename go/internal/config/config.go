@@ -38,6 +38,7 @@ type Config struct {
 	LLMTimeout       time.Duration
 	RunTimeout       time.Duration
 	ApprovalTimeout  time.Duration
+	MaxRetainedRuns  int
 }
 
 func Load() Config {
@@ -55,6 +56,7 @@ func Load() Config {
 		LLMTimeout:       time.Duration(envInt("AEGIS_LLM_TIMEOUT_SEC", 120)) * time.Second,
 		RunTimeout:       time.Duration(envInt("AEGIS_RUN_TIMEOUT_SEC", 900)) * time.Second,
 		ApprovalTimeout:  time.Duration(envInt("AEGIS_APPROVAL_TIMEOUT_SEC", 5)) * time.Second,
+		MaxRetainedRuns:  envInt("AEGIS_MAX_RETAINED_RUNS", 200),
 	}
 
 	if feeds := os.Getenv("AEGIS_RSS_FEEDS"); feeds != "" {

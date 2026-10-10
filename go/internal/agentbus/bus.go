@@ -47,6 +47,13 @@ func (b *Bus) History(runID string) []Envelope {
 	return out
 }
 
+// Delete drops a run's mailbox once its history has been captured elsewhere.
+func (b *Bus) Delete(runID string) {
+	b.mu.Lock()
+	delete(b.byRun, runID)
+	b.mu.Unlock()
+}
+
 // Filter returns envelopes matching kind and/or recipient.
 func (b *Bus) Filter(runID string, kind Kind, to AgentID) []Envelope {
 	all := b.History(runID)

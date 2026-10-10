@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -234,8 +235,22 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (s *Server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.List())
+const (
+	defaultListLimit = 50
+	maxListLimit     = 500
+)
+
+func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
+	limit := defaultListLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = min(n, maxListLimit)
+	}
+	writeJSON(w, http.StatusOK, s.store.List(limit))
 }
 
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {

@@ -314,6 +314,11 @@ func finish(o *Orchestrator, res *RunResult, emit func()) RunResult {
 		}
 	}
 	emit()
+	// RunResult now owns copies of messages and audit rows; drop per-run state so
+	// long-lived processes don't grow without bound.
+	o.bus.Delete(res.ID)
+	o.cases.Delete(res.ID)
+	o.audit.Delete(res.ID)
 	return *res
 }
 

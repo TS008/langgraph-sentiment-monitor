@@ -74,6 +74,12 @@ func (s *Store) Put(runID string, slot Slot, summary string, payload interface{}
 	return art.ID, art
 }
 
+func (s *Store) Delete(runID string) {
+	s.mu.Lock()
+	delete(s.runs, runID)
+	s.mu.Unlock()
+}
+
 func (s *Store) Checkpoint(runID string, at agentbus.AgentID) {
 	s.mu.Lock()
 	if st := s.runs[runID]; st != nil {

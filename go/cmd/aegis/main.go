@@ -52,7 +52,7 @@ func usage() {
 }
 
 func newApp(cfg config.Config) (*api.Server, queue.Enqueuer, *events.Hub, *telemetry.Metrics) {
-	st := store.NewMemoryRunStore()
+	st := store.NewMemoryRunStore(cfg.MaxRetainedRuns)
 	gate := approval.NewGate(cfg.ApprovalTimeout)
 	hub := events.NewHub()
 	metrics := telemetry.NewMetrics()

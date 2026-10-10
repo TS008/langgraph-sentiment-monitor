@@ -47,6 +47,12 @@ func (l *AuditLog) Record(runID string, agent agentbus.AgentID, tool Tool, detai
 	return rec
 }
 
+func (l *AuditLog) Delete(runID string) {
+	l.mu.Lock()
+	delete(l.rows, runID)
+	l.mu.Unlock()
+}
+
 func (l *AuditLog) List(runID string) []AuditRecord {
 	l.mu.RLock()
 	src := l.rows[runID]

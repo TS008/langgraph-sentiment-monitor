@@ -34,7 +34,7 @@ func TestOrchestratorLiveEndToEnd(t *testing.T) {
 	if res.Error != "" && res.Status == "failed" {
 		t.Fatalf("run failed: %s", res.Error)
 	}
-	if len(bus.History(res.ID)) < 5 {
-		t.Fatalf("expected bus traffic, got %d messages", len(bus.History(res.ID)))
+	if len(res.AgentMessages) < 5 {
+		t.Fatalf("expected bus traffic, got %d messages", len(res.AgentMessages))
 	}
 }
