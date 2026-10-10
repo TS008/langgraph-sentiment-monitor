@@ -17,6 +17,7 @@ import (
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/api"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/approval"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/config"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/crawl"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/events"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/queue"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/store"
@@ -52,7 +53,7 @@ func usage() {
 }
 
 func newApp(cfg config.Config) (*api.Server, queue.Enqueuer, *events.Hub, *telemetry.Metrics) {
-	st := store.NewMemoryRunStore()
+	st := store.NewMemoryRunStore(cfg.MaxRetainedRuns)
 	gate := approval.NewGate(cfg.ApprovalTimeout)
 	hub := events.NewHub()
 	metrics := telemetry.NewMetrics()
@@ -86,11 +87,16 @@ func runServe(args []string) {
 		defer c.Close()
 	}
 
+	// No Read/WriteTimeout: SSE streams and synchronous runs are long-lived, and
+	// ReadTimeout would cancel their request contexts. Bodies are capped per handler.
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
 	}
+	httpSrv.RegisterOnShutdown(srv.CloseStreams)
 
 	go func() {
 		slog.Info("aegis_listen", "addr", cfg.HTTPAddr, "llm", cfg.LLMEnabled(), "queue", q.Mode(), "model", cfg.LLMModel)
@@ -105,6 +111,12 @@ func runServe(args []string) {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelDrain()
+	if err := srv.Shutdown(drainCtx); err != nil {
+		slog.Warn("aegis_shutdown", "detail", "in-flight runs cancelled", "err", err)
+	}
+	crawl.CloseBrowser()
 	_ = metrics
 }
 
@@ -142,6 +154,7 @@ func runOnce(args []string) {
 	defer cancel()
 
 	res := srv.RunOnce(ctx, *url, *js || cfg.UseJSRender)
+	crawl.CloseBrowser()
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(res); err != nil {

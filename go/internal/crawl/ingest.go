@@ -10,6 +10,7 @@ import (
 
 	"github.com/gocolly/colly/v2"
 	"github.com/mmcdole/gofeed"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/textutil"
 	"golang.org/x/time/rate"
 )
 
@@ -121,9 +122,9 @@ func (i *Ingestor) FetchHTML(ctx context.Context, pageURL string) (Signal, error
 	}
 
 	var (
-		title   string
-		snippet strings.Builder
-		errMu   sync.Mutex
+		title    string
+		snippet  strings.Builder
+		errMu    sync.Mutex
 		fetchErr error
 	)
 
@@ -173,24 +174,30 @@ func (i *Ingestor) FetchHTML(ctx context.Context, pageURL string) (Signal, error
 	}, nil
 }
 
+// stripHTML replaces tags with spaces in a single pass and collapses whitespace.
+// A '<' with no later '>' is kept as literal text.
 func stripHTML(s string) string {
-	s = strings.ReplaceAll(s, "<br>", " ")
-	s = strings.ReplaceAll(s, "<br/>", " ")
-	for strings.Contains(s, "<") && strings.Contains(s, ">") {
-		start := strings.Index(s, "<")
-		end := strings.Index(s[start:], ">")
-		if end < 0 {
-			break
+	lastClose := strings.LastIndexByte(s, '>')
+	var b strings.Builder
+	b.Grow(len(s))
+	inTag := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case inTag:
+			if c == '>' {
+				inTag = false
+			}
+		case c == '<' && i < lastClose:
+			inTag = true
+			b.WriteByte(' ')
+		default:
+			b.WriteByte(c)
 		}
-		s = s[:start] + " " + s[start+end+1:]
 	}
-	return strings.Join(strings.Fields(s), " ")
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 func truncate(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
+	return textutil.Truncate(strings.TrimSpace(s), n)
 }

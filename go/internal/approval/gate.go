@@ -66,24 +66,26 @@ func (g *Gate) Request(ctx context.Context, requestID string, summary string) De
 
 // Approve resolves a pending request (HTTP hook for future commander UI).
 func (g *Gate) Approve(requestID string, note string) bool {
-	g.mu.Lock()
-	ch, ok := g.pending[requestID]
-	g.mu.Unlock()
-	if !ok {
-		return false
-	}
-	ch <- Decision{Approved: true, By: "human", Note: note, At: time.Now().UTC()}
-	return true
+	return g.resolve(requestID, Decision{Approved: true, By: "human", Note: note, At: time.Now().UTC()})
 }
 
 // Reject resolves a pending request.
 func (g *Gate) Reject(requestID string, note string) bool {
+	return g.resolve(requestID, Decision{Approved: false, By: "human", Note: note, At: time.Now().UTC()})
+}
+
+// resolve claims the request under the lock so at most one caller ever sends on
+// its 1-buffered channel; duplicate or late clicks return false instead of blocking.
+func (g *Gate) resolve(requestID string, d Decision) bool {
 	g.mu.Lock()
 	ch, ok := g.pending[requestID]
+	if ok {
+		delete(g.pending, requestID)
+	}
 	g.mu.Unlock()
 	if !ok {
 		return false
 	}
-	ch <- Decision{Approved: false, By: "human", Note: note, At: time.Now().UTC()}
+	ch <- d
 	return true
 }

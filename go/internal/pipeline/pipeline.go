@@ -13,6 +13,7 @@ import (
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/llm"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/rbac"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/telemetry"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/textutil"
 )
 
 // Stage names mirror the legacy LangGraph agent flow.
@@ -46,27 +47,27 @@ type StageLog struct {
 
 // RunResult is the full output of one pipeline execution.
 type RunResult struct {
-	ID             string                `json:"id"`
-	Status         string                `json:"status"`
-	Checkpoint     string                `json:"checkpoint"`
-	StartedAt      time.Time             `json:"started_at"`
-	FinishedAt     time.Time             `json:"finished_at"`
-	Signals        []crawl.Signal        `json:"signals"`
-	IngestNotes    []string              `json:"ingest_notes,omitempty"`
-	Sentiment      llm.SentimentResult   `json:"sentiment"`
-	Diagnosis      string                `json:"diagnosis"`
-	Strategy       string                `json:"strategy"`
-	LegalReview    string                `json:"legal_review"`
-	Approval       approval.Decision     `json:"approval"`
-	ActionStub     string                `json:"action_stub"`
-	Feedback       string                `json:"realtime_sentiment"`
-	StatusCheck    string                `json:"status_check"`
-	CrisisResolved bool                  `json:"crisis_resolved"`
-	PostMortem     string                `json:"post_mortem"`
-	Stages         []StageLog            `json:"stages"`
-	AgentMessages  []agentbus.Envelope   `json:"agent_messages"`
-	AuditLog       []rbac.AuditRecord    `json:"audit_log"`
-	Error          string                `json:"error,omitempty"`
+	ID             string              `json:"id"`
+	Status         string              `json:"status"`
+	Checkpoint     string              `json:"checkpoint"`
+	StartedAt      time.Time           `json:"started_at"`
+	FinishedAt     time.Time           `json:"finished_at"`
+	Signals        []crawl.Signal      `json:"signals"`
+	IngestNotes    []string            `json:"ingest_notes,omitempty"`
+	Sentiment      llm.SentimentResult `json:"sentiment"`
+	Diagnosis      string              `json:"diagnosis"`
+	Strategy       string              `json:"strategy"`
+	LegalReview    string              `json:"legal_review"`
+	Approval       approval.Decision   `json:"approval"`
+	ActionStub     string              `json:"action_stub"`
+	Feedback       string              `json:"realtime_sentiment"`
+	StatusCheck    string              `json:"status_check"`
+	CrisisResolved bool                `json:"crisis_resolved"`
+	PostMortem     string              `json:"post_mortem"`
+	Stages         []StageLog          `json:"stages"`
+	AgentMessages  []agentbus.Envelope `json:"agent_messages"`
+	AuditLog       []rbac.AuditRecord  `json:"audit_log"`
+	Error          string              `json:"error,omitempty"`
 }
 
 // OnProgress is called after each stage (for SSE / store updates).
@@ -78,9 +79,14 @@ type Runner struct {
 }
 
 func NewRunner(cfg config.Config, gate *approval.Gate, metrics *telemetry.Metrics) *Runner {
+	return NewRunnerWithDeps(cfg, gate, metrics, nil)
+}
+
+// NewRunnerWithDeps is NewRunner with injectable collaborators (tests, custom sources).
+func NewRunnerWithDeps(cfg config.Config, gate *approval.Gate, metrics *telemetry.Metrics, deps *OrchestratorDeps) *Runner {
 	bus := agentbus.NewBus()
 	return &Runner{
-		orch: NewOrchestrator(cfg, gate, metrics, bus, nil, nil, nil),
+		orch: NewOrchestrator(cfg, gate, metrics, bus, nil, nil, deps),
 	}
 }
 
@@ -93,21 +99,42 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions, onProgress OnProgress
 	return r.orch.Execute(ctx, opts, onProgress)
 }
 
+const maxCorpusSignals = 20
+
+// buildCorpus samples signals round-robin across sources (in first-seen order)
+// so one large source such as RSS can't crowd hot lists out of the prompt.
 func buildCorpus(signals []crawl.Signal) string {
+	var order []string
+	bySource := make(map[string][]crawl.Signal)
+	for _, s := range signals {
+		if _, ok := bySource[s.Source]; !ok {
+			order = append(order, s.Source)
+		}
+		bySource[s.Source] = append(bySource[s.Source], s)
+	}
 	var b strings.Builder
-	for i, s := range signals {
-		if i >= 20 {
+	written := 0
+	for round := 0; written < maxCorpusSignals; round++ {
+		progressed := false
+		for _, src := range order {
+			list := bySource[src]
+			if round >= len(list) {
+				continue
+			}
+			s := list[round]
+			fmt.Fprintf(&b, "- [%s] %s — %s\n", s.Source, s.Title, s.Snippet)
+			progressed = true
+			if written++; written >= maxCorpusSignals {
+				break
+			}
+		}
+		if !progressed {
 			break
 		}
-		fmt.Fprintf(&b, "- [%s] %s — %s\n", s.Source, s.Title, s.Snippet)
 	}
 	return b.String()
 }
 
 func truncate(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
+	return textutil.Truncate(strings.TrimSpace(s), n)
 }

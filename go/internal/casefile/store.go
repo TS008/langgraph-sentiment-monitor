@@ -2,6 +2,7 @@ package casefile
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -11,24 +12,24 @@ import (
 
 // Artifact is a bounded chunk of run state (reference by id in handoffs).
 type Artifact struct {
-	ID       string           `json:"id"`
-	Slot     Slot             `json:"slot"`
-	Summary  string           `json:"summary"`
-	Payload  json.RawMessage  `json:"payload,omitempty"`
-	Author   agentbus.AgentID `json:"author"`
+	ID      string           `json:"id"`
+	Slot    Slot             `json:"slot"`
+	Summary string           `json:"summary"`
+	Payload json.RawMessage  `json:"payload,omitempty"`
+	Author  agentbus.AgentID `json:"author"`
 }
 
 // RunState is checkpoint-friendly case file for one crisis run.
 type RunState struct {
-	RunID      string             `json:"run_id"`
-	Checkpoint agentbus.AgentID   `json:"checkpoint"`
+	RunID      string              `json:"run_id"`
+	Checkpoint agentbus.AgentID    `json:"checkpoint"`
 	Artifacts  map[string]Artifact `json:"artifacts"`
 }
 
 // Store holds in-memory case files (v1; swap for Redis/DB later).
 type Store struct {
-	mu    sync.RWMutex
-	runs  map[string]*RunState
+	mu   sync.RWMutex
+	runs map[string]*RunState
 }
 
 func NewStore() *Store {
@@ -72,6 +73,12 @@ func (s *Store) Put(runID string, slot Slot, summary string, payload interface{}
 	st.Artifacts[art.ID] = art
 	s.mu.Unlock()
 	return art.ID, art
+}
+
+func (s *Store) Delete(runID string) {
+	s.mu.Lock()
+	delete(s.runs, runID)
+	s.mu.Unlock()
 }
 
 func (s *Store) Checkpoint(runID string, at agentbus.AgentID) {
@@ -130,18 +137,27 @@ func slotsForRole(role rbac.Role) map[Slot]bool {
 	}
 }
 
+// slotOrder fixes prompt layout to pipeline order so summaries are stable across
+// runs (deterministic prompts, better provider-side prompt caching).
+var slotOrder = []Slot{SlotSignals, SlotSentiment, SlotDiagnosis, SlotStrategy, SlotLegal, SlotApproval, SlotAction, SlotFeedback, SlotStatus, SlotPostMortem}
+
 // HandoffSummary builds a compact string for LLM prompts from scoped view.
+// Slots that would exceed maxLen are skipped so later, shorter slots still fit.
 func HandoffSummary(view map[Slot]string, maxLen int) string {
 	if len(view) == 0 {
 		return ""
 	}
-	var b []byte
-	for slot, sum := range view {
-		line := string(slot) + ": " + sum + "\n"
-		if len(b)+len(line) > maxLen {
-			break
+	var b strings.Builder
+	for _, slot := range slotOrder {
+		sum, ok := view[slot]
+		if !ok {
+			continue
 		}
-		b = append(b, line...)
+		line := string(slot) + ": " + sum + "\n"
+		if b.Len()+len(line) > maxLen {
+			continue
+		}
+		b.WriteString(line)
 	}
-	return string(b)
+	return b.String()
 }

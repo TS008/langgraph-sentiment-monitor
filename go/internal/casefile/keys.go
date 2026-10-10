@@ -4,14 +4,14 @@ package casefile
 type Slot string
 
 const (
-	SlotSignals   Slot = "signals"
-	SlotSentiment Slot = "sentiment"
-	SlotDiagnosis Slot = "diagnosis"
-	SlotStrategy  Slot = "strategy"
-	SlotLegal     Slot = "legal"
-	SlotApproval  Slot = "approval"
-	SlotAction    Slot = "action"
-	SlotFeedback  Slot = "feedback"
-	SlotStatus    Slot = "status"
+	SlotSignals    Slot = "signals"
+	SlotSentiment  Slot = "sentiment"
+	SlotDiagnosis  Slot = "diagnosis"
+	SlotStrategy   Slot = "strategy"
+	SlotLegal      Slot = "legal"
+	SlotApproval   Slot = "approval"
+	SlotAction     Slot = "action"
+	SlotFeedback   Slot = "feedback"
+	SlotStatus     Slot = "status"
 	SlotPostMortem Slot = "post_mortem"
 )

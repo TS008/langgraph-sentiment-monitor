@@ -3,10 +3,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -21,6 +25,14 @@ import (
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/telemetry"
 )
 
+const (
+	maxRunRequestBytes      = 64 << 10
+	maxApprovalRequestBytes = 16 << 10
+	defaultSSEHeartbeat     = 20 * time.Second
+	defaultRunTimeout       = 15 * time.Minute
+	apiRequestTimeout       = 30 * time.Second
+)
+
 // Server exposes HTTP API and commander UI.
 type Server struct {
 	cfg     config.Config
@@ -32,6 +44,32 @@ type Server struct {
 	metrics *telemetry.Metrics
 	logger  *slog.Logger
 	static  fs.FS
+
+	runSem       chan struct{}
+	sseHeartbeat time.Duration
+	streamsDone  chan struct{}
+	closeStreams sync.Once
+	bgCtx        context.Context
+	bgCancel     context.CancelFunc
+	bgWG         sync.WaitGroup
+}
+
+// Option customizes a Server.
+type Option func(*serverOptions)
+
+type serverOptions struct {
+	deps         *pipeline.OrchestratorDeps
+	sseHeartbeat time.Duration
+}
+
+// WithRunnerDeps injects pipeline collaborators (tests, custom sources).
+func WithRunnerDeps(deps *pipeline.OrchestratorDeps) Option {
+	return func(o *serverOptions) { o.deps = deps }
+}
+
+// WithSSEHeartbeat overrides the SSE keep-alive interval.
+func WithSSEHeartbeat(d time.Duration) Option {
+	return func(o *serverOptions) { o.sseHeartbeat = d }
 }
 
 func NewServer(
@@ -43,20 +81,38 @@ func NewServer(
 	metrics *telemetry.Metrics,
 	logger *slog.Logger,
 	static fs.FS,
+	opts ...Option,
 ) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	var o serverOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.sseHeartbeat <= 0 {
+		o.sseHeartbeat = defaultSSEHeartbeat
+	}
+	maxRuns := cfg.MaxConcurrentRuns
+	if maxRuns < 1 {
+		maxRuns = 1
+	}
+	bgCtx, bgCancel := context.WithCancel(context.Background())
 	srv := &Server{
-		cfg:     cfg,
-		store:   st,
-		gate:    gate,
-		queue:   q,
-		hub:     hub,
-		metrics: metrics,
-		logger:  logger,
-		runner:  pipeline.NewRunner(cfg, gate, metrics),
-		static:  static,
+		cfg:          cfg,
+		store:        st,
+		gate:         gate,
+		queue:        q,
+		hub:          hub,
+		metrics:      metrics,
+		logger:       logger,
+		runner:       pipeline.NewRunnerWithDeps(cfg, gate, metrics, o.deps),
+		static:       static,
+		runSem:       make(chan struct{}, maxRuns),
+		sseHeartbeat: o.sseHeartbeat,
+		streamsDone:  make(chan struct{}),
+		bgCtx:        bgCtx,
+		bgCancel:     bgCancel,
 	}
 	srv.wireAgentBus()
 	return srv
@@ -79,25 +135,51 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(telemetry.SlogMiddleware(s.logger, s.metrics))
-	r.Use(middleware.Timeout(180 * time.Second))
 
-	if s.static != nil {
-		r.Get("/", s.handleCommander)
-		r.Get("/commander", s.handleCommander)
-		r.Get("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(s.static))).ServeHTTP)
-	}
+	// Long-lived: SSE streams indefinitely; run creation waits on a detached run.
 	r.Get("/commander/events", s.handleSSE)
-
-	r.Get("/health", s.handleHealth)
-	r.Get("/healthz", s.handleHealth)
-	r.Handle("/metrics", s.metrics.Handler())
 	r.Post("/api/v1/runs", s.handleCreateRun)
-	r.Get("/api/v1/runs/{id}", s.handleGetRun)
-	r.Get("/api/v1/runs", s.handleListRuns)
-	r.Post("/api/v1/approvals/{id}/approve", s.handleApprove)
-	r.Post("/api/v1/approvals/{id}/reject", s.handleReject)
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Timeout(apiRequestTimeout))
+		if s.static != nil {
+			r.Get("/", s.handleCommander)
+			r.Get("/commander", s.handleCommander)
+			r.Get("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(s.static))).ServeHTTP)
+		}
+		r.Get("/health", s.handleHealth)
+		r.Get("/healthz", s.handleHealth)
+		r.Handle("/metrics", s.metrics.Handler())
+		r.Get("/api/v1/runs/{id}", s.handleGetRun)
+		r.Get("/api/v1/runs", s.handleListRuns)
+		r.Post("/api/v1/approvals/{id}/approve", s.handleApprove)
+		r.Post("/api/v1/approvals/{id}/reject", s.handleReject)
+	})
 
 	return r
+}
+
+// CloseStreams ends open SSE connections; register with http.Server.RegisterOnShutdown.
+func (s *Server) CloseStreams() {
+	s.closeStreams.Do(func() { close(s.streamsDone) })
+}
+
+// Shutdown waits for in-flight runs until ctx expires, then cancels them.
+func (s *Server) Shutdown(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.bgWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		s.bgCancel()
+		return nil
+	case <-ctx.Done():
+		s.bgCancel()
+		<-done
+		return ctx.Err()
+	}
 }
 
 func (s *Server) handleCommander(w http.ResponseWriter, r *http.Request) {
@@ -111,26 +193,45 @@ func (s *Server) handleCommander(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	ch, unsub := s.hub.Subscribe()
-	defer unsub()
-
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ch, unsub := s.hub.Subscribe()
+	defer unsub()
+
+	_, _ = fmt.Fprint(w, ": connected\n\n")
+	flusher.Flush()
+
+	// Proxies (Cloudflare included) drop idle streams; comment frames keep them open.
+	heartbeat := time.NewTicker(s.sseHeartbeat)
+	defer heartbeat.Stop()
 
 	notify := r.Context().Done()
 	for {
 		select {
 		case <-notify:
 			return
-		case msg := <-ch:
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", msg)
+		case <-s.streamsDone:
+			return
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", msg); err != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}
@@ -141,9 +242,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"status":      "ok",
 		"llm_enabled": s.cfg.LLMEnabled(),
 		"llm_model":   s.cfg.LLMModel,
-		"queue_mode":  s.queue.Mode(),
+		"queue_mode":  s.queueMode(),
 		"time":        time.Now().UTC(),
 	})
+}
+
+func (s *Server) queueMode() string {
+	if s.queue == nil {
+		return "memory"
+	}
+	return s.queue.Mode()
 }
 
 type createRunRequest struct {
@@ -153,9 +261,11 @@ type createRunRequest struct {
 }
 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRunRequestBytes)
 	var req createRunRequest
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
 	}
 
 	runID := pipeline.NewRunID()
@@ -165,30 +275,71 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		JSRender: req.JSRender,
 	}
 
-	pending := pipeline.RunResult{
-		ID:        runID,
-		Status:    "pending",
-		StartedAt: time.Now().UTC(),
-	}
-	s.store.Put(pending)
-	s.hub.Publish(events.Event{Type: "run_started", RunID: runID})
-
-	ctx := r.Context()
-	if req.Async || s.queue.Mode() == "asynq" {
-		if err := s.queue.Enqueue(ctx, payload); err != nil {
+	if s.queueMode() == "asynq" {
+		if err := s.queue.Enqueue(r.Context(), payload); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		s.store.Put(pipeline.RunResult{ID: runID, Status: "queued", StartedAt: time.Now().UTC()})
+		s.hub.Publish(events.Event{Type: "run_started", RunID: runID})
 		writeJSON(w, http.StatusAccepted, map[string]string{"id": runID, "status": "queued"})
 		return
 	}
 
-	result := s.executeRun(ctx, payload)
-	status := http.StatusOK
-	if result.Error != "" {
-		status = http.StatusAccepted
+	release, ok := s.tryAcquireRun()
+	if !ok {
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "too many concurrent runs", http.StatusTooManyRequests)
+		return
 	}
-	writeJSON(w, status, result)
+	s.store.Put(pipeline.RunResult{ID: runID, Status: "pending", StartedAt: time.Now().UTC()})
+	s.hub.Publish(events.Event{Type: "run_started", RunID: runID})
+
+	done := s.startRun(payload, release)
+	if req.Async {
+		writeJSON(w, http.StatusAccepted, map[string]string{"id": runID, "status": "running"})
+		return
+	}
+
+	select {
+	case result := <-done:
+		status := http.StatusOK
+		if result.Error != "" {
+			status = http.StatusAccepted
+		}
+		writeJSON(w, status, result)
+	case <-r.Context().Done():
+		// Client went away; the run continues and its result stays retrievable via GET.
+	}
+}
+
+func (s *Server) tryAcquireRun() (release func(), ok bool) {
+	select {
+	case s.runSem <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-s.runSem }) }, true
+	default:
+		return nil, false
+	}
+}
+
+// startRun executes detached from the HTTP request so client disconnects and
+// handler timeouts don't cancel a run; AEGIS_RUN_TIMEOUT_SEC bounds it instead.
+func (s *Server) startRun(p queue.RunPayload, release func()) <-chan pipeline.RunResult {
+	done := make(chan pipeline.RunResult, 1)
+	timeout := s.cfg.RunTimeout
+	if timeout <= 0 {
+		timeout = defaultRunTimeout
+	}
+	s.bgWG.Add(1)
+	go func() {
+		defer s.bgWG.Done()
+		defer release()
+		ctx, cancel := context.WithTimeout(s.bgCtx, timeout)
+		defer cancel()
+		done <- s.executeRun(ctx, p)
+	}()
+	return done
 }
 
 func (s *Server) executeRun(ctx context.Context, p queue.RunPayload) pipeline.RunResult {
@@ -234,15 +385,35 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (s *Server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.List())
+const (
+	defaultListLimit = 50
+	maxListLimit     = 500
+)
+
+func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
+	limit := defaultListLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = min(n, maxListLimit)
+	}
+	writeJSON(w, http.StatusOK, s.store.List(limit))
+}
+
+func decodeApprovalNote(w http.ResponseWriter, r *http.Request) string {
+	var body struct {
+		Note string `json:"note"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalRequestBytes)).Decode(&body)
+	return body.Note
 }
 
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	var body struct{ Note string `json:"note"` }
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	if !s.gate.Approve(id, body.Note) {
+	if !s.gate.Approve(id, decodeApprovalNote(w, r)) {
 		http.Error(w, "no pending approval", http.StatusNotFound)
 		return
 	}
@@ -252,9 +423,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	var body struct{ Note string `json:"note"` }
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	if !s.gate.Reject(id, body.Note) {
+	if !s.gate.Reject(id, decodeApprovalNote(w, r)) {
 		http.Error(w, "no pending approval", http.StatusNotFound)
 		return
 	}

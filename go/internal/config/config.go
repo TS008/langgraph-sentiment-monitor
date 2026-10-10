@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	DefaultLLMBaseURL      = "https://opencode.ai/zen/go/v1"
-	DefaultLLMModel        = "mimo-v2.6-flash"
+	DefaultLLMBaseURL = "https://opencode.ai/zen/go/v1"
+	DefaultLLMModel   = "mimo-v2.6-flash"
 	// Self-hosted via docker-compose (see repo docker-compose.yml). Public busiyi.world is often Cloudflare-blocked.
-	DefaultNewsNowBaseURL = "http://127.0.0.1:4444"
+	DefaultNewsNowBaseURL  = "http://127.0.0.1:4444"
 	DefaultNewsNowInterval = 300 // seconds
 )
 
@@ -29,32 +29,36 @@ type Config struct {
 	NewsNowIDs         []string
 	NewsNowMinInterval time.Duration
 
-	HTTPAddr string
-	RedisURL string
+	HTTPAddr  string
+	RedisURL  string
 	QueueMode string // "memory" | "asynq"
 
-	CrawlParallelism int
-	UseJSRender      bool
-	LLMTimeout       time.Duration
-	RunTimeout       time.Duration
-	ApprovalTimeout  time.Duration
+	CrawlParallelism  int
+	UseJSRender       bool
+	LLMTimeout        time.Duration
+	RunTimeout        time.Duration
+	ApprovalTimeout   time.Duration
+	MaxRetainedRuns   int
+	MaxConcurrentRuns int
 }
 
 func Load() Config {
 	_ = loadDotEnv()
 
 	c := Config{
-		LLMAPIKey:  llmAPIKeyFromEnv(),
-		LLMBaseURL: envOr("AEGIS_LLM_BASE_URL", DefaultLLMBaseURL),
-		LLMModel:   envOr("AEGIS_LLM_MODEL", DefaultLLMModel),
-		HTTPAddr:   envOr("AEGIS_HTTP_ADDR", ":8080"),
-		RedisURL:   envOr("AEGIS_REDIS_URL", "redis://127.0.0.1:6379"),
-		QueueMode:  strings.ToLower(envOr("AEGIS_QUEUE_MODE", "memory")),
-		CrawlParallelism: envInt("AEGIS_CRAWL_PARALLELISM", 4),
-		UseJSRender:      envBool("AEGIS_CRAWL_JS_RENDER", false),
-		LLMTimeout:       time.Duration(envInt("AEGIS_LLM_TIMEOUT_SEC", 120)) * time.Second,
-		RunTimeout:       time.Duration(envInt("AEGIS_RUN_TIMEOUT_SEC", 900)) * time.Second,
-		ApprovalTimeout:  time.Duration(envInt("AEGIS_APPROVAL_TIMEOUT_SEC", 5)) * time.Second,
+		LLMAPIKey:         llmAPIKeyFromEnv(),
+		LLMBaseURL:        envOr("AEGIS_LLM_BASE_URL", DefaultLLMBaseURL),
+		LLMModel:          envOr("AEGIS_LLM_MODEL", DefaultLLMModel),
+		HTTPAddr:          envOr("AEGIS_HTTP_ADDR", ":8080"),
+		RedisURL:          envOr("AEGIS_REDIS_URL", "redis://127.0.0.1:6379"),
+		QueueMode:         strings.ToLower(envOr("AEGIS_QUEUE_MODE", "memory")),
+		CrawlParallelism:  envInt("AEGIS_CRAWL_PARALLELISM", 4),
+		UseJSRender:       envBool("AEGIS_CRAWL_JS_RENDER", false),
+		LLMTimeout:        time.Duration(envInt("AEGIS_LLM_TIMEOUT_SEC", 120)) * time.Second,
+		RunTimeout:        time.Duration(envInt("AEGIS_RUN_TIMEOUT_SEC", 900)) * time.Second,
+		ApprovalTimeout:   time.Duration(envInt("AEGIS_APPROVAL_TIMEOUT_SEC", 5)) * time.Second,
+		MaxRetainedRuns:   envInt("AEGIS_MAX_RETAINED_RUNS", 200),
+		MaxConcurrentRuns: envInt("AEGIS_MAX_CONCURRENT_RUNS", 4),
 	}
 
 	if feeds := os.Getenv("AEGIS_RSS_FEEDS"); feeds != "" {
