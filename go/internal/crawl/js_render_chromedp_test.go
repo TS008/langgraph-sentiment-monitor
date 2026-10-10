@@ -34,7 +34,7 @@ func TestFetchHTMLJSSharesBrowserAcrossConcurrentCalls(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			sigs[i], errs[i] = FetchHTMLJS(ctx, fmt.Sprintf("%s/p%d", srv.URL, i))
+			sigs[i], errs[i] = FetchHTMLJS(ctx, fmt.Sprintf("%s/p%d", srv.URL, i), loopbackOnly)
 		}(i)
 	}
 	wg.Wait()
@@ -48,7 +48,7 @@ func TestFetchHTMLJSSharesBrowserAcrossConcurrentCalls(t *testing.T) {
 			t.Fatalf("fetch %d snippet=%q want %q", i, sigs[i].Snippet, want)
 		}
 	}
-	if _, err := FetchHTMLJS(ctx, srv.URL+"/again"); err != nil {
+	if _, err := FetchHTMLJS(ctx, srv.URL+"/again", loopbackOnly); err != nil {
 		t.Fatal(err)
 	}
 	if browserCtx != first {
@@ -59,7 +59,7 @@ func TestFetchHTMLJSSharesBrowserAcrossConcurrentCalls(t *testing.T) {
 func TestFetchHTMLJSHonorsCallerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := FetchHTMLJS(ctx, "http://127.0.0.1:1/"); err == nil {
+	if _, err := FetchHTMLJS(ctx, "http://127.0.0.1:1/", loopbackOnly); err == nil {
 		t.Fatal("expected cancellation error")
 	}
 }

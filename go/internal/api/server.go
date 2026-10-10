@@ -19,6 +19,7 @@ import (
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/approval"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/config"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/events"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/netguard"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/pipeline"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/queue"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/store"
@@ -35,16 +36,18 @@ const (
 
 // Server exposes HTTP API and commander UI.
 type Server struct {
-	cfg     config.Config
-	store   *store.MemoryRunStore
-	runner  *pipeline.Runner
-	gate    *approval.Gate
-	queue   queue.Enqueuer
-	hub     *events.Hub
-	metrics *telemetry.Metrics
-	logger  *slog.Logger
-	static  fs.FS
+	cfg       config.Config
+	store     store.RunStore
+	runner    *pipeline.Runner
+	gate      *approval.Gate
+	approvals ApprovalResolver
+	queue     queue.Enqueuer
+	hub       *events.Hub
+	metrics   *telemetry.Metrics
+	logger    *slog.Logger
+	static    fs.FS
 
+	fetchPolicy  netguard.Policy
 	runSem       chan struct{}
 	sseHeartbeat time.Duration
 	streamsDone  chan struct{}
@@ -60,6 +63,19 @@ type Option func(*serverOptions)
 type serverOptions struct {
 	deps         *pipeline.OrchestratorDeps
 	sseHeartbeat time.Duration
+	approvals    ApprovalResolver
+}
+
+// ApprovalResolver applies a human decision to a pending approval request.
+// It reports false when no such request is pending.
+type ApprovalResolver interface {
+	Resolve(ctx context.Context, id string, approved bool, note string) (bool, error)
+}
+
+// WithApprovalResolver routes approve/reject calls elsewhere (e.g. to the asynq
+// worker holding the request). Defaults to the server's own gate.
+func WithApprovalResolver(r ApprovalResolver) Option {
+	return func(o *serverOptions) { o.approvals = r }
 }
 
 // WithRunnerDeps injects pipeline collaborators (tests, custom sources).
@@ -74,7 +90,7 @@ func WithSSEHeartbeat(d time.Duration) Option {
 
 func NewServer(
 	cfg config.Config,
-	st *store.MemoryRunStore,
+	st store.RunStore,
 	gate *approval.Gate,
 	q queue.Enqueuer,
 	hub *events.Hub,
@@ -93,15 +109,21 @@ func NewServer(
 	if o.sseHeartbeat <= 0 {
 		o.sseHeartbeat = defaultSSEHeartbeat
 	}
+	if o.approvals == nil {
+		o.approvals = gate
+	}
 	maxRuns := cfg.MaxConcurrentRuns
 	if maxRuns < 1 {
 		maxRuns = 1
 	}
+	policy, _ := cfg.FetchPolicy()
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	srv := &Server{
+		fetchPolicy:  policy,
 		cfg:          cfg,
 		store:        st,
 		gate:         gate,
+		approvals:    o.approvals,
 		queue:        q,
 		hub:          hub,
 		metrics:      metrics,
@@ -268,6 +290,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.HTMLURL != "" {
+		if _, err := s.fetchPolicy.ValidateURL(r.Context(), req.HTMLURL); err != nil {
+			http.Error(w, "html_url rejected: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	runID := pipeline.NewRunID()
 	payload := queue.RunPayload{
 		RunID:    runID,
@@ -276,11 +305,16 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.queueMode() == "asynq" {
+		// Record "queued" before enqueueing: a fast worker's final result must not be
+		// overwritten by a late "queued" write.
+		queued := pipeline.RunResult{ID: runID, Status: "queued", StartedAt: time.Now().UTC()}
+		s.store.Put(queued)
 		if err := s.queue.Enqueue(r.Context(), payload); err != nil {
+			queued.Status, queued.Error, queued.FinishedAt = "failed", "enqueue: "+err.Error(), time.Now().UTC()
+			s.store.Put(queued)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		s.store.Put(pipeline.RunResult{ID: runID, Status: "queued", StartedAt: time.Now().UTC()})
 		s.hub.Publish(events.Event{Type: "run_started", RunID: runID})
 		writeJSON(w, http.StatusAccepted, map[string]string{"id": runID, "status": "queued"})
 		return
@@ -412,23 +446,30 @@ func decodeApprovalNote(w http.ResponseWriter, r *http.Request) string {
 }
 
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if !s.gate.Approve(id, decodeApprovalNote(w, r)) {
-		http.Error(w, "no pending approval", http.StatusNotFound)
-		return
-	}
-	s.hub.Publish(events.Event{Type: "approval", RunID: id, Message: "approved"})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "approved"})
+	s.resolveApproval(w, r, true)
 }
 
 func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
+	s.resolveApproval(w, r, false)
+}
+
+func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request, approved bool) {
 	id := chi.URLParam(r, "id")
-	if !s.gate.Reject(id, decodeApprovalNote(w, r)) {
+	ok, err := s.approvals.Resolve(r.Context(), id, approved, decodeApprovalNote(w, r))
+	if err != nil {
+		http.Error(w, "approval relay failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if !ok {
 		http.Error(w, "no pending approval", http.StatusNotFound)
 		return
 	}
-	s.hub.Publish(events.Event{Type: "approval", RunID: id, Message: "rejected"})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "rejected"})
+	status := "rejected"
+	if approved {
+		status = "approved"
+	}
+	s.hub.Publish(events.Event{Type: "approval", RunID: id, Message: status})
+	writeJSON(w, http.StatusOK, map[string]string{"status": status})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v interface{}) {

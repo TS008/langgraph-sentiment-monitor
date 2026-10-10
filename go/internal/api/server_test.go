@@ -180,6 +180,19 @@ func TestCreateRunRejectsOversizedBody(t *testing.T) {
 	}
 }
 
+func TestCreateRunRejectsInternalHTMLURL(t *testing.T) {
+	srv, _ := newTestServer(t, 1)
+	for _, u := range []string{"http://169.254.169.254/latest/meta-data/", "http://127.0.0.1:8080/", "file:///etc/passwd"} {
+		rec, _ := postRun(t, srv.Router(), `{"async":true,"html_url":"`+u+`"}`)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "html_url rejected") {
+			t.Fatalf("%s: code=%d body=%s", u, rec.Code, rec.Body)
+		}
+	}
+	if srv.store.Len() != 0 {
+		t.Fatal("rejected URLs must not create runs")
+	}
+}
+
 func TestSSESendsHeartbeat(t *testing.T) {
 	srv, _ := newTestServer(t, 1, WithSSEHeartbeat(20*time.Millisecond))
 	ts := httptest.NewServer(srv.Router())

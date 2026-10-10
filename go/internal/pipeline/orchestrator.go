@@ -32,7 +32,8 @@ type Orchestrator struct {
 }
 
 func NewOrchestrator(cfg config.Config, gate *approval.Gate, metrics *telemetry.Metrics, bus *agentbus.Bus, cases *casefile.Store, audit *rbac.AuditLog, deps *OrchestratorDeps) *Orchestrator {
-	ing := crawl.NewIngestor(cfg.CrawlParallelism)
+	policy, _ := cfg.FetchPolicy() // fails closed; main validates config at startup
+	ing := crawl.NewIngestor(cfg.CrawlParallelism, policy)
 	reg := social.DefaultRegistry(cfg, ing)
 	if bus == nil {
 		bus = agentbus.NewBus()

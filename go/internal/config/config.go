@@ -1,12 +1,14 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/netguard"
 )
 
 const (
@@ -40,6 +42,10 @@ type Config struct {
 	ApprovalTimeout   time.Duration
 	MaxRetainedRuns   int
 	MaxConcurrentRuns int
+
+	// User-supplied html_url fetches are blocked from private networks unless allowed.
+	FetchAllowPrivate bool
+	FetchAllowCIDRs   []string
 }
 
 func Load() Config {
@@ -71,6 +77,13 @@ func Load() Config {
 	}
 	if len(c.RSSFeeds) == 0 {
 		c.RSSFeeds = []string{"https://hnrss.org/frontpage"}
+	}
+
+	c.FetchAllowPrivate = envBool("AEGIS_FETCH_ALLOW_PRIVATE", false)
+	for _, s := range strings.Split(os.Getenv("AEGIS_FETCH_ALLOW_CIDRS"), ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			c.FetchAllowCIDRs = append(c.FetchAllowCIDRs, s)
+		}
 	}
 
 	c.NewsNowBaseURL = envOr("AEGIS_NEWSNOW_BASE_URL", DefaultNewsNowBaseURL)
@@ -110,6 +123,18 @@ func llmAPIKeyFromEnv() string {
 func (c Config) LLMEnabled() bool {
 	k := c.LLMAPIKey
 	return k != "" && k != "your_api_key_here" && !strings.HasPrefix(k, "your_")
+}
+
+// FetchPolicy builds the SSRF policy for user-supplied URLs. On a parse error the
+// returned policy has no allowlist, i.e. it fails closed.
+func (c Config) FetchPolicy() (netguard.Policy, error) {
+	p := netguard.Policy{AllowPrivate: c.FetchAllowPrivate}
+	cidrs, err := netguard.ParseCIDRs(c.FetchAllowCIDRs)
+	if err != nil {
+		return p, fmt.Errorf("AEGIS_FETCH_ALLOW_CIDRS: %w", err)
+	}
+	p.AllowCIDRs = cidrs
+	return p, nil
 }
 
 func (c Config) UseAsynq() bool {
