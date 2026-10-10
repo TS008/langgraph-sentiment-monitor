@@ -36,8 +36,12 @@
       <button class="secondary" id="btn-reject">Reject</button>
     </div>
     <div class="card" style="flex: 2">
-      <h2>Live stages (SSE)</h2>
+      <h2>Live stages &amp; agent bus (SSE)</h2>
       <div id="log"></div>
+    </div>
+    <div class="card" style="flex: 1 1 100%">
+      <h2>Permission audit (latest run)</h2>
+      <div id="audit" class="warn"></div>
     </div>
   </div>
 
@@ -61,6 +65,11 @@
         const ev = JSON.parse(e.data);
         if (ev.type === 'stage') {
           appendLog(`[${ev.run_id}] ${ev.stage}: ${ev.message}`, 'stage');
+        } else if (ev.type === 'agent_message') {
+          appendLog(`BUS ${ev.stage}: ${ev.message}`, 'ok');
+        } else if (ev.type === 'audit') {
+          document.getElementById('audit').textContent = ev.message;
+          appendLog(`AUDIT ${ev.message}`, 'warn');
         } else {
           appendLog(JSON.stringify(ev), 'ok');
         }
@@ -78,6 +87,14 @@
       const r = await fetch('/api/v1/runs/' + id);
       const data = await r.json();
       appendLog('Post-mortem: ' + (data.post_mortem || '').slice(0, 200) + '…', 'ok');
+      if (data.audit_log && data.audit_log.length) {
+        const denied = data.audit_log.filter(a => !a.allowed);
+        document.getElementById('audit').textContent =
+          data.audit_log.length + ' checks, ' + denied.length + ' denied';
+      }
+      if (data.agent_messages) {
+        appendLog('Agent messages: ' + data.agent_messages.length, 'ok');
+      }
     }
 
     document.getElementById('btn-run').onclick = async () => {

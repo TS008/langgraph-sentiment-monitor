@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/agentbus"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/approval"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/config"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/events"
@@ -46,7 +47,7 @@ func NewServer(
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{
+	srv := &Server{
 		cfg:     cfg,
 		store:   st,
 		gate:    gate,
@@ -57,6 +58,19 @@ func NewServer(
 		runner:  pipeline.NewRunner(cfg, gate, metrics),
 		static:  static,
 	}
+	srv.wireAgentBus()
+	return srv
+}
+
+func (s *Server) wireAgentBus() {
+	s.runner.Bus().OnPublish(func(env agentbus.Envelope) {
+		s.hub.Publish(events.Event{
+			Type:    "agent_message",
+			RunID:   env.RunID,
+			Stage:   string(env.Kind) + ":" + string(env.From),
+			Message: env.Subject + " → " + string(env.To) + ": " + env.Body,
+		})
+	})
 }
 
 func (s *Server) Router() http.Handler {
@@ -186,6 +200,15 @@ func (s *Server) executeRun(ctx context.Context, p queue.RunPayload) pipeline.Ru
 				RunID:   res.ID,
 				Stage:   last.Stage,
 				Message: last.Message,
+			})
+		}
+		if len(res.AuditLog) > 0 {
+			last := res.AuditLog[len(res.AuditLog)-1]
+			s.hub.Publish(events.Event{
+				Type:    "audit",
+				RunID:   res.ID,
+				Stage:   string(last.Tool),
+				Message: fmt.Sprintf("%s allowed=%v %s", last.Agent, last.Allowed, last.Detail),
 			})
 		}
 	}
