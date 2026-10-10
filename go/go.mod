@@ -14,6 +14,7 @@ require (
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/redis/go-redis/v9 v9.14.1
 	github.com/sashabaranov/go-openai v1.40.0
+	golang.org/x/net v0.37.0
 	golang.org/x/sync v0.12.0
 	golang.org/x/time v0.14.0
 )
@@ -47,7 +48,6 @@ require (
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/temoto/robotstxt v1.1.2 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
-	golang.org/x/net v0.37.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	google.golang.org/appengine v1.6.8 // indirect

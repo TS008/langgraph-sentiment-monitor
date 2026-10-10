@@ -37,7 +37,7 @@ type Policy struct {
 	// AllowCIDRs explicitly permits ranges that would otherwise be blocked
 	// (e.g. one internal status page).
 	AllowCIDRs []netip.Prefix
-	// Resolver is used by ValidateURL; nil means net.DefaultResolver.
+	// Resolver is used by ValidateURL and Dialer; nil means net.DefaultResolver.
 	Resolver *net.Resolver
 }
 
@@ -133,6 +133,7 @@ func (p Policy) Dialer() *net.Dialer {
 	return &net.Dialer{
 		Timeout:   15 * time.Second,
 		KeepAlive: 30 * time.Second,
+		Resolver:  p.Resolver,
 		Control: func(_, address string, _ syscall.RawConn) error {
 			host, _, err := net.SplitHostPort(address)
 			if err != nil {

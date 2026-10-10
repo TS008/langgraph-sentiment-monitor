@@ -83,6 +83,63 @@ func TestFetchHTMLJSBlocksRedirectToInternalHost(t *testing.T) {
 	}
 }
 
+// rebind.test passes the pre-flight and Fetch-guard lookups as 127.0.0.1, then
+// resolves to 127.0.0.2 when the egress proxy dials. Chrome cannot resolve the
+// name on its own, so any successful load would have to come through the proxy.
+func TestFetchHTMLJSBlocksDNSRebinding(t *testing.T) {
+	requireChrome(t)
+	defer CloseBrowser()
+	internal := netguardtest.NewLoopbackServer(t, "127.0.0.2", "secret")
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(internal, "http://"))
+	dns := &netguardtest.RebindingDNS{
+		Host:   "rebind.test",
+		First:  netip.MustParseAddr("127.0.0.1"),
+		Then:   netip.MustParseAddr("127.0.0.2"),
+		Switch: 2,
+	}
+	p := loopbackOnly
+	p.Resolver = dns.Resolver(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sig, err := FetchHTMLJS(ctx, "http://rebind.test:"+port+"/", p)
+	if strings.Contains(sig.Title+sig.Snippet, "secret") {
+		t.Fatalf("internal content leaked via rebinding: %+v", sig)
+	}
+	if !errors.Is(err, netguard.ErrBlocked) {
+		t.Fatalf("expected ErrBlocked, got %v", err)
+	}
+	if dns.Lookups() < 3 {
+		t.Fatalf("egress proxy did not resolve at dial time (lookups=%d)", dns.Lookups())
+	}
+}
+
+// Control for the rebinding test: a stable name served on the allowlisted address
+// renders through the proxy, proving Chrome's traffic really goes through it.
+func TestFetchHTMLJSResolvesThroughEgressProxy(t *testing.T) {
+	requireChrome(t)
+	defer CloseBrowser()
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("<html><head><title>via proxy</title></head><body>ok</body></html>"))
+	}))
+	defer page.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(page.URL, "http://"))
+	ip := netip.MustParseAddr("127.0.0.1")
+	dns := &netguardtest.RebindingDNS{Host: "stable.test", First: ip, Then: ip}
+	p := loopbackOnly
+	p.Resolver = dns.Resolver(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sig, err := FetchHTMLJS(ctx, "http://stable.test:"+port+"/", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sig.Title != "via proxy" {
+		t.Fatalf("title=%q", sig.Title)
+	}
+}
+
 func TestFetchHTMLJSBlocksSubresourceToInternalHost(t *testing.T) {
 	requireChrome(t)
 	defer CloseBrowser()
