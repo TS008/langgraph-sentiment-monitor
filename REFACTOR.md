@@ -23,6 +23,13 @@ High-concurrency rewrite of AEGIS crisis / sentiment monitoring. Legacy Python +
 | `AEGIS_LLM_BASE_URL` | Default `https://opencode.ai/zen/go/v1` |
 | `AEGIS_LLM_MODEL` | Default `mimo-v2.6-flash` |
 
+**OpenCode Go routing (required by the API):** every chat completion request must include:
+
+- Header `x-opencode-session: <uuid>` — AEGIS sets this to the **pipeline run id** and reuses it for all LLM calls in that run (`go/internal/llm`).
+- Header `User-Agent: aegis-monitor/1.0` (non-generic; set via custom HTTP transport).
+
+Without these, OpenCode returns `400 MissingSessionID`. No extra env vars are needed; session ids are assigned per run automatically.
+
 Heuristic/offline fallback runs when the key is missing or the API returns 401/403.
 
 ## Architecture

@@ -26,6 +26,7 @@ func New(cfg config.Config) *Client {
 			base += "/v1"
 		}
 		ocfg.BaseURL = base
+		ocfg.HTTPClient = newOpenCodeHTTPClient()
 		c.client = openai.NewClientWithConfig(ocfg)
 	}
 	return c

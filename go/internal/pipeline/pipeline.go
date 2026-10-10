@@ -160,6 +160,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions, onProgress OnProgress
 
 	llmCtx, cancel := context.WithTimeout(ctx, r.cfg.LLMTimeout)
 	defer cancel()
+	llmCtx = llm.WithSession(llmCtx, runID)
 
 	// 2. Sentiment / risk
 	t0 = time.Now().UTC()
