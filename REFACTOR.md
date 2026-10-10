@@ -109,7 +109,7 @@ npx wrangler deploy
 - Image defaults: `AEGIS_NEWSNOW_DISABLE=true`, `AEGIS_QUEUE_MODE=memory` — set Worker secret `AEGIS_NEWSNOW_BASE_URL` to an external self-hosted NewsNow if needed
 - Optional Chromium image: `deploy/aegis/Dockerfile.chromium` (not used by default on Cloudflare)
 
-Requires **Docker** locally for `wrangler deploy` image build. This agent environment cannot run Docker/Wrangler auth; follow `cloudflare/README.md` on your machine.
+**Workers Paid** unlocks the Containers API. Prefer **Workers Builds** (GitHub → root `cloudflare/`, deploy `npx wrangler deploy` on production branch) so Cloudflare runs Docker during deploy — no laptop Docker. CLI deploy still needs local Docker + `wrangler login`. This cloud agent VM has neither; see `cloudflare/README.md`.
 
 ## Run
 

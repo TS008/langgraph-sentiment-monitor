@@ -4,19 +4,66 @@ This packages **`aegis serve`** (Go API + commander UI + ingest) behind a Worker
 
 `https://aegis-monitor.<YOUR_SUBDOMAIN>.workers.dev`
 
-## Prerequisites
+## Plan requirement (Containers API)
+
+**Workers Paid** (or another plan that includes Containers) is required. Containers are not available on the free Workers plan. After upgrading, confirm in the dashboard that **Workers & Pages → your Worker → Containers** is usable and that `npx wrangler containers list` succeeds once you are logged in locally or via CI.
+
+## Recommended: Workers Builds (no laptop Docker)
+
+Use [Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/) so Cloudflare builds the Go image with Docker during deploy. You do **not** need Docker on your laptop.
+
+### Connect the repository
+
+1. Cloudflare dashboard → **Workers & Pages** → **Create** → **Import a repository** (or add Builds to an existing Worker).
+2. Git provider: **GitHub** → authorize → select **`TS008/langgraph-sentiment-monitor`**.
+3. **Root directory**: `cloudflare` (this folder; `wrangler.jsonc` and `package.json` live here).
+4. **Production branch**: `main` (or your release branch, e.g. `cursor/go-highperf-93ac` while iterating).
+5. **Build command** (optional but recommended for reproducible installs):
+
+   ```bash
+   npm ci --legacy-peer-deps
+   ```
+
+6. **Deploy command** (production branch — required for Containers):
+
+   ```bash
+   npx wrangler deploy
+   ```
+
+   On the **production branch only**, `wrangler deploy` builds `../Dockerfile.aegis` (context = repo root), pushes the image, and rolls out container instances. Non-production branch builds default to `npx wrangler versions upload`, which **does not** update container images; keep preview branches on `versions upload` or only merge to production when you want a full container rollout.
+
+7. **Environment variables / secrets** (dashboard → Worker → **Settings** → **Variables and Secrets**):
+
+   | Secret | Purpose |
+   |--------|---------|
+   | `OPENCODE_GO_API_KEY` | Required for live LLM |
+   | `AEGIS_NEWSNOW_BASE_URL` | Optional external NewsNow |
+   | `AEGIS_NEWSNOW_DISABLE` | Optional; image defaults to disabling NewsNow |
+
+8. Push to the production branch. First deploy often takes **several minutes** (image build + rollout). Then open:
+
+   - Commander UI: `https://aegis-monitor.<subdomain>.workers.dev/commander`
+   - Health: `https://aegis-monitor.<subdomain>.workers.dev/healthz`
+
+Workers that use Durable Objects (including Containers) do not get branch preview URLs; rely on production deploy or Version History after `versions upload`.
+
+References: [Builds configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/), [Deploy Containers](https://developers.cloudflare.com/containers/deploy/).
+
+## Local / CLI deploy (Docker on your machine)
+
+### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) running locally (required for `wrangler deploy` image build)
 - [Node.js](https://nodejs.org/) 20+
-- Cloudflare account with **Workers Paid** (Containers) and `wrangler login`
+- Cloudflare account with **Workers Paid** and `npx wrangler login`
 
-## Deploy
+### Deploy
 
-From the **repository root** (so `Dockerfile.aegis` can `COPY go/`):
+From **`cloudflare/`** (build context for the image is the repo root via `build_context` in `wrangler.jsonc`):
 
 ```bash
 cd cloudflare
-npm install
+npm ci --legacy-peer-deps
 npx wrangler secret put OPENCODE_GO_API_KEY   # required for live LLM
 # optional:
 # npx wrangler secret put AEGIS_NEWSNOW_BASE_URL
@@ -26,11 +73,6 @@ npx wrangler deploy
 ```
 
 First deploy builds `../Dockerfile.aegis` (linux/amd64) and pushes to Cloudflare's registry. **Wait several minutes** after the first deploy before expecting container routes to succeed.
-
-Open:
-
-- Commander UI: `https://<worker-host>/commander`
-- Health: `https://<worker-host>/healthz`
 
 ## Secrets & env
 
@@ -67,6 +109,8 @@ Default image is **lean** (no Chromium). For chromedp builds see `deploy/aegis/D
 
 ## Troubleshooting
 
-- `wrangler containers list` — instance status
+- `wrangler containers list` — instance status (requires login)
 - Worker responds but `/commander` 502 — container still provisioning or failed health check on `/healthz`
-- Build fails — run deploy from `cloudflare/` with Docker running; build context is repo root (`context: ".."` in `wrangler.jsonc`)
+- Build fails — run deploy from `cloudflare/` with Docker running (CLI) or use Workers Builds; Dockerfile path is `../Dockerfile.aegis`, context `..`
+- Deploy fails **Docker is missing** — use Workers Builds on the production branch, or install/start Docker for CLI deploy
+- `wrangler deploy` config errors — use `build_context` (not `context`) under `containers[].images.*` for Wrangler 4.x

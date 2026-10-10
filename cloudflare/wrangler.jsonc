@@ -10,11 +10,10 @@
     {
       "class_name": "AegisContainer",
       "scheduling_policy": "durable_object",
-      "max_instances": 3,
       "images": {
         "base": {
           "dockerfile": "../Dockerfile.aegis",
-          "context": ".."
+          "build_context": ".."
         }
       }
     }
