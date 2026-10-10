@@ -1,0 +1,11 @@
+# Optional Redis for AEGIS asynq job queue (production-style workers).
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - aegis_redis_data:/data
+
+volumes:
+  aegis_redis_data:

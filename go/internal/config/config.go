@@ -9,17 +9,25 @@ import (
 	"github.com/joho/godotenv"
 )
 
+const (
+	DefaultLLMBaseURL = "https://opencode.ai/zen/go/v1"
+	DefaultLLMModel   = "mimo-v2.6-flash"
+)
+
 // Config holds runtime settings loaded from the environment.
 type Config struct {
-	DeepSeekAPIKey string
-	DeepSeekBase   string
-	DeepSeekModel  string
+	LLMAPIKey  string
+	LLMBaseURL string
+	LLMModel   string
 
 	RSSFeeds []string
 
 	HTTPAddr string
+	RedisURL string
+	QueueMode string // "memory" | "asynq"
 
 	CrawlParallelism int
+	UseJSRender      bool
 	LLMTimeout       time.Duration
 	ApprovalTimeout  time.Duration
 }
@@ -28,11 +36,14 @@ func Load() Config {
 	_ = loadDotEnv()
 
 	c := Config{
-		DeepSeekAPIKey: os.Getenv("DEEPSEEK_API_KEY"),
-		DeepSeekBase:   envOr("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-		DeepSeekModel:  envOr("DEEPSEEK_MODEL", "deepseek-chat"),
-		HTTPAddr:       envOr("AEGIS_HTTP_ADDR", ":8080"),
+		LLMAPIKey:  llmAPIKeyFromEnv(),
+		LLMBaseURL: envOr("AEGIS_LLM_BASE_URL", DefaultLLMBaseURL),
+		LLMModel:   envOr("AEGIS_LLM_MODEL", DefaultLLMModel),
+		HTTPAddr:   envOr("AEGIS_HTTP_ADDR", ":8080"),
+		RedisURL:   envOr("AEGIS_REDIS_URL", "redis://127.0.0.1:6379"),
+		QueueMode:  strings.ToLower(envOr("AEGIS_QUEUE_MODE", "memory")),
 		CrawlParallelism: envInt("AEGIS_CRAWL_PARALLELISM", 4),
+		UseJSRender:      envBool("AEGIS_CRAWL_JS_RENDER", false),
 		LLMTimeout:       time.Duration(envInt("AEGIS_LLM_TIMEOUT_SEC", 60)) * time.Second,
 		ApprovalTimeout:  time.Duration(envInt("AEGIS_APPROVAL_TIMEOUT_SEC", 5)) * time.Second,
 	}
@@ -52,8 +63,20 @@ func Load() Config {
 	return c
 }
 
+func llmAPIKeyFromEnv() string {
+	if k := os.Getenv("OPENCODE_GO_API_KEY"); k != "" {
+		return k
+	}
+	return os.Getenv("AEGIS_LLM_API_KEY")
+}
+
 func (c Config) LLMEnabled() bool {
-	return c.DeepSeekAPIKey != "" && c.DeepSeekAPIKey != "your_api_key_here"
+	k := c.LLMAPIKey
+	return k != "" && k != "your_api_key_here" && !strings.HasPrefix(k, "your_")
+}
+
+func (c Config) UseAsynq() bool {
+	return c.QueueMode == "asynq"
 }
 
 func loadDotEnv() error {
@@ -82,4 +105,19 @@ func envInt(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+func envBool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
 }

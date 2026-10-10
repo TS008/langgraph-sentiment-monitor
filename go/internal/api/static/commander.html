@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AEGIS Commander</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #e8e8e8; background: #0f1419; }
+    body { margin: 0; padding: 1rem 1.5rem; max-width: 1100px; }
+    h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+    .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .card { background: #1a2332; border: 1px solid #2a3544; border-radius: 8px; padding: 1rem; flex: 1; min-width: 280px; }
+    label { display: block; font-size: 0.85rem; color: #9ab; margin-top: 0.5rem; }
+    input[type=text] { width: 100%; padding: 0.4rem; border-radius: 4px; border: 1px solid #3a4a5a; background: #0f1419; color: #eee; }
+    button { margin-top: 0.75rem; padding: 0.5rem 1rem; border: none; border-radius: 4px; background: #3d7eff; color: #fff; cursor: pointer; }
+    button.secondary { background: #3a4a5a; }
+    #log { font-family: ui-monospace, monospace; font-size: 0.8rem; max-height: 320px; overflow-y: auto; white-space: pre-wrap; }
+    .stage { color: #7ec8ff; }
+    .ok { color: #6ddb8a; }
+    .warn { color: #f0c674; }
+  </style>
+</head>
+<body>
+  <h1>🛡️ AEGIS Commander (Go)</h1>
+  <div class="row">
+    <div class="card">
+      <h2>Trigger run</h2>
+      <label>Optional HTML URL</label>
+      <input id="html_url" type="text" placeholder="https://example.com/status" />
+      <label><input id="js_render" type="checkbox" /> Use JS rendering (chromedp)</label>
+      <button id="btn-run">Start pipeline</button>
+      <p id="run-status" class="warn"></p>
+      <p>Pending approval id: <code id="approval-id">—</code></p>
+      <button class="secondary" id="btn-approve">Approve action</button>
+      <button class="secondary" id="btn-reject">Reject</button>
+    </div>
+    <div class="card" style="flex: 2">
+      <h2>Live stages (SSE)</h2>
+      <div id="log"></div>
+    </div>
+  </div>
+
+  <script>
+    const log = document.getElementById('log');
+    const runStatus = document.getElementById('run-status');
+    const approvalId = document.getElementById('approval-id');
+    let currentRun = null;
+
+    function appendLog(line, cls) {
+      const d = document.createElement('div');
+      if (cls) d.className = cls;
+      d.textContent = line;
+      log.appendChild(d);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    const es = new EventSource('/commander/events');
+    es.onmessage = (e) => {
+      try {
+        const ev = JSON.parse(e.data);
+        if (ev.type === 'stage') {
+          appendLog(`[${ev.run_id}] ${ev.stage}: ${ev.message}`, 'stage');
+        } else {
+          appendLog(JSON.stringify(ev), 'ok');
+        }
+        if (ev.type === 'run_started') currentRun = ev.run_id;
+        if (ev.type === 'run_finished' && ev.run_id) {
+          currentRun = ev.run_id;
+          runStatus.textContent = 'Run finished: ' + ev.message;
+          approvalId.textContent = ev.run_id + '-action';
+          fetchRun(ev.run_id);
+        }
+      } catch (_) { appendLog(e.data); }
+    };
+
+    async function fetchRun(id) {
+      const r = await fetch('/api/v1/runs/' + id);
+      const data = await r.json();
+      appendLog('Post-mortem: ' + (data.post_mortem || '').slice(0, 200) + '…', 'ok');
+    }
+
+    document.getElementById('btn-run').onclick = async () => {
+      runStatus.textContent = 'Starting…';
+      const body = {
+        html_url: document.getElementById('html_url').value,
+        js_render: document.getElementById('js_render').checked,
+      };
+      const r = await fetch('/api/v1/runs', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      const data = await r.json();
+      if (data.id) {
+        currentRun = data.id;
+        approvalId.textContent = data.id + '-action';
+        runStatus.textContent = data.status || 'running';
+      } else {
+        currentRun = data.id || currentRun;
+        approvalId.textContent = (data.id || '') + '-action';
+        runStatus.textContent = 'completed';
+      }
+    };
+
+    document.getElementById('btn-approve').onclick = () => postApproval('approve');
+    document.getElementById('btn-reject').onclick = () => postApproval('reject');
+
+    async function postApproval(kind) {
+      const id = approvalId.textContent;
+      if (!id || id === '—') return;
+      await fetch(`/api/v1/approvals/${id}/${kind}`, { method: 'POST', body: '{}' });
+      appendLog('Approval ' + kind + ' for ' + id, 'warn');
+    }
+  </script>
+</body>
+</html>

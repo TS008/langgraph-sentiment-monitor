@@ -3,6 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io/fs"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -10,24 +13,49 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/approval"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/config"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/events"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/pipeline"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/queue"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/store"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/telemetry"
 )
 
-// Server exposes health and pipeline trigger endpoints.
+// Server exposes HTTP API and commander UI.
 type Server struct {
-	cfg    config.Config
-	store  *store.MemoryRunStore
-	runner *pipeline.Runner
-	gate   *approval.Gate
+	cfg     config.Config
+	store   *store.MemoryRunStore
+	runner  *pipeline.Runner
+	gate    *approval.Gate
+	queue   queue.Enqueuer
+	hub     *events.Hub
+	metrics *telemetry.Metrics
+	logger  *slog.Logger
+	static  fs.FS
 }
 
-func NewServer(cfg config.Config, st *store.MemoryRunStore, gate *approval.Gate) *Server {
+func NewServer(
+	cfg config.Config,
+	st *store.MemoryRunStore,
+	gate *approval.Gate,
+	q queue.Enqueuer,
+	hub *events.Hub,
+	metrics *telemetry.Metrics,
+	logger *slog.Logger,
+	static fs.FS,
+) *Server {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Server{
-		cfg:    cfg,
-		store:  st,
-		gate:   gate,
-		runner: pipeline.NewRunner(cfg, gate),
+		cfg:     cfg,
+		store:   st,
+		gate:    gate,
+		queue:   q,
+		hub:     hub,
+		metrics: metrics,
+		logger:  logger,
+		runner:  pipeline.NewRunner(cfg, gate, metrics),
+		static:  static,
 	}
 }
 
@@ -35,11 +63,19 @@ func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(120 * time.Second))
+	r.Use(telemetry.SlogMiddleware(s.logger, s.metrics))
+	r.Use(middleware.Timeout(180 * time.Second))
+
+	if s.static != nil {
+		r.Get("/", s.handleCommander)
+		r.Get("/commander", s.handleCommander)
+		r.Get("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(s.static))).ServeHTTP)
+	}
+	r.Get("/commander/events", s.handleSSE)
 
 	r.Get("/health", s.handleHealth)
+	r.Handle("/metrics", s.metrics.Handler())
 	r.Post("/api/v1/runs", s.handleCreateRun)
 	r.Get("/api/v1/runs/{id}", s.handleGetRun)
 	r.Get("/api/v1/runs", s.handleListRuns)
@@ -49,16 +85,56 @@ func (s *Server) Router() http.Handler {
 	return r
 }
 
+func (s *Server) handleCommander(w http.ResponseWriter, r *http.Request) {
+	data, err := fs.ReadFile(s.static, "commander.html")
+	if err != nil {
+		http.Error(w, "ui not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
+func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch, unsub := s.hub.Subscribe()
+	defer unsub()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	notify := r.Context().Done()
+	for {
+		select {
+		case <-notify:
+			return
+		case msg := <-ch:
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", msg)
+			flusher.Flush()
+		}
+	}
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":     "ok",
+		"status":      "ok",
 		"llm_enabled": s.cfg.LLMEnabled(),
-		"time":       time.Now().UTC(),
+		"llm_model":   s.cfg.LLMModel,
+		"queue_mode":  s.queue.Mode(),
+		"time":        time.Now().UTC(),
 	})
 }
 
 type createRunRequest struct {
-	HTMLURL string `json:"html_url"`
+	HTMLURL  string `json:"html_url"`
+	JSRender bool   `json:"js_render"`
+	Async    bool   `json:"async"`
 }
 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
@@ -66,14 +142,62 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
+
+	runID := pipeline.NewRunID()
+	payload := queue.RunPayload{
+		RunID:    runID,
+		HTMLURL:  req.HTMLURL,
+		JSRender: req.JSRender,
+	}
+
+	pending := pipeline.RunResult{
+		ID:        runID,
+		Status:    "pending",
+		StartedAt: time.Now().UTC(),
+	}
+	s.store.Put(pending)
+	s.hub.Publish(events.Event{Type: "run_started", RunID: runID})
+
 	ctx := r.Context()
-	result := s.runner.Run(ctx, req.HTMLURL)
-	s.store.Put(result)
+	if req.Async || s.queue.Mode() == "asynq" {
+		if err := s.queue.Enqueue(ctx, payload); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"id": runID, "status": "queued"})
+		return
+	}
+
+	result := s.executeRun(ctx, payload)
 	status := http.StatusOK
 	if result.Error != "" {
 		status = http.StatusAccepted
 	}
 	writeJSON(w, status, result)
+}
+
+func (s *Server) executeRun(ctx context.Context, p queue.RunPayload) pipeline.RunResult {
+	onProgress := func(res pipeline.RunResult) {
+		s.store.Put(res)
+		if len(res.Stages) > 0 {
+			last := res.Stages[len(res.Stages)-1]
+			s.hub.Publish(events.Event{
+				Type:    "stage",
+				RunID:   res.ID,
+				Stage:   last.Stage,
+				Message: last.Message,
+			})
+		}
+	}
+	opts := pipeline.RunOptions{
+		RunID:    p.RunID,
+		HTMLURL:  p.HTMLURL,
+		JSRender: p.JSRender,
+	}
+	result := s.runner.Run(ctx, opts, onProgress)
+	s.store.Put(result)
+	s.hub.Publish(events.Event{Type: "run_finished", RunID: result.ID, Message: result.Status})
+	return result
 }
 
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +222,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no pending approval", http.StatusNotFound)
 		return
 	}
+	s.hub.Publish(events.Event{Type: "approval", RunID: id, Message: "approved"})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "approved"})
 }
 
@@ -109,6 +234,7 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no pending approval", http.StatusNotFound)
 		return
 	}
+	s.hub.Publish(events.Event{Type: "approval", RunID: id, Message: "rejected"})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "rejected"})
 }
 
@@ -119,8 +245,16 @@ func writeJSON(w http.ResponseWriter, code int, v interface{}) {
 }
 
 // RunOnce is used by CLI without HTTP.
-func (s *Server) RunOnce(ctx context.Context, htmlURL string) pipeline.RunResult {
-	result := s.runner.Run(ctx, htmlURL)
-	s.store.Put(result)
-	return result
+func (s *Server) RunOnce(ctx context.Context, htmlURL string, js bool) pipeline.RunResult {
+	return s.executeRun(ctx, queue.RunPayload{
+		RunID:    pipeline.NewRunID(),
+		HTMLURL:  htmlURL,
+		JSRender: js,
+	})
+}
+
+// ProcessQueuePayload is the worker entrypoint.
+func (s *Server) ProcessQueuePayload(ctx context.Context, p queue.RunPayload) error {
+	s.executeRun(ctx, p)
+	return nil
 }

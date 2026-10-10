@@ -30,7 +30,7 @@
 
 ## Go refactor (recommended for new work)
 
-Branch **`refactor/go-highperf`** adds a Go-first, high-concurrency MVP under [`go/`](go/). See **[REFACTOR.md](REFACTOR.md)** for library choices and run commands (`aegis serve`, `aegis run`). Legacy Python stack is documented in [`legacy-python/README.md`](legacy-python/README.md).
+Branch **`refactor/go-highperf`** adds a Go-first, high-concurrency stack under [`go/`](go/) (OpenCode Go LLM, commander UI, optional Redis/asynq). See **[REFACTOR.md](REFACTOR.md)** for env vars and run commands. Legacy Python: [`legacy-python/README.md`](legacy-python/README.md).
 
 ## 🚀 快速开始 (legacy Python)
 

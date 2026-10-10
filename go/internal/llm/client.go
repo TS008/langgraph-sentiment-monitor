@@ -11,7 +11,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// Client wraps OpenAI-compatible chat APIs (DeepSeek, etc.).
+// Client wraps OpenAI-compatible chat APIs (OpenCode Go, etc.).
 type Client struct {
 	cfg    config.Config
 	client *openai.Client
@@ -20,8 +20,8 @@ type Client struct {
 func New(cfg config.Config) *Client {
 	c := &Client{cfg: cfg}
 	if cfg.LLMEnabled() {
-		ocfg := openai.DefaultConfig(cfg.DeepSeekAPIKey)
-		base := strings.TrimRight(cfg.DeepSeekBase, "/")
+		ocfg := openai.DefaultConfig(cfg.LLMAPIKey)
+		base := strings.TrimRight(cfg.LLMBaseURL, "/")
 		if !strings.HasSuffix(base, "/v1") {
 			base += "/v1"
 		}
@@ -52,7 +52,7 @@ Signals:
 ` + corpus
 
 	resp, err := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model: c.cfg.DeepSeekModel,
+		Model: c.cfg.LLMModel,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleUser, Content: prompt},
 		},
@@ -90,7 +90,7 @@ func (c *Client) Complete(ctx context.Context, system string, user string) (stri
 		return "[offline] " + truncate(user, 200), nil
 	}
 	resp, err := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model: c.cfg.DeepSeekModel,
+		Model: c.cfg.LLMModel,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: system},
 			{Role: openai.ChatMessageRoleUser, Content: user},
@@ -142,7 +142,7 @@ func heuristicAnalyze(corpus string) SentimentResult {
 		Sentiment:   sentiment,
 		Summary:     "Heuristic analysis (no API key): " + truncate(corpus, 120),
 		KeyTopics:   []string{"heuristic"},
-		Recommended: "Enable DEEPSEEK_API_KEY for full LLM scoring",
+		Recommended: "Set OPENCODE_GO_API_KEY for full LLM scoring",
 	}
 }
 

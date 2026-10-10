@@ -104,6 +104,14 @@ func (i *Ingestor) FetchRSS(ctx context.Context, feedURLs []string) ([]Signal, e
 	return signals, nil
 }
 
+// FetchPage fetches HTML with colly or chromedp when useJS is true.
+func (i *Ingestor) FetchPage(ctx context.Context, pageURL string, useJS bool) (Signal, error) {
+	if useJS {
+		return FetchHTMLJS(ctx, pageURL)
+	}
+	return i.FetchHTML(ctx, pageURL)
+}
+
 // FetchHTML fetches a single page and extracts title + visible text snippet (no JS).
 func (i *Ingestor) FetchHTML(ctx context.Context, pageURL string) (Signal, error) {
 	if err := i.limiter.Wait(ctx); err != nil {
