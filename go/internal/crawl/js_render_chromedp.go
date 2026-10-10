@@ -2,6 +2,7 @@ package crawl
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/netguard"
 )
@@ -32,7 +34,14 @@ func sharedBrowser() (context.Context, error) {
 	if browserCtx != nil && browserCtx.Err() == nil {
 		return browserCtx, nil
 	}
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), chromedp.DefaultExecAllocatorOptions[:]...)
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		// Traffic that cannot go through the per-render HTTP proxy is a policy bypass.
+		chromedp.Flag("disable-quic", true),
+		chromedp.Flag("force-webrtc-ip-handling-policy", "disable_non_proxied_udp"),
+		chromedp.Flag("webrtc-ip-handling-policy", "disable_non_proxied_udp"),
+		chromedp.Flag("dns-prefetch-disable", true),
+	)
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	if err := chromedp.Run(ctx); err != nil {
 		cancel()
@@ -54,10 +63,12 @@ func CloseBrowser() {
 	}
 }
 
-// FetchHTMLJS renders JS-heavy pages with headless Chrome (chromedp). Every request
-// the tab makes (navigation, redirects, subresources, fetch/XHR) is checked against
-// policy. Chrome resolves DNS itself, so a rebinding race between our lookup and
-// Chrome's remains possible; the colly path is not affected by this.
+// FetchHTMLJS renders JS-heavy pages with headless Chrome (chromedp).
+//
+// Each render gets its own browser context whose traffic is forced through a
+// netguard.Proxy, so DNS resolution and the IP check happen at connect time, as on
+// the colly path; Chrome's own DNS answers never pick the destination. The Fetch
+// domain guard additionally rejects blocked requests early with a clear error.
 func FetchHTMLJS(ctx context.Context, pageURL string, policy netguard.Policy) (Signal, error) {
 	if err := ctx.Err(); err != nil {
 		return Signal{}, err
@@ -76,7 +87,16 @@ func FetchHTMLJS(ctx context.Context, pageURL string, policy netguard.Policy) (S
 	if err != nil {
 		return Signal{}, err
 	}
-	tabCtx, cancelTab := chromedp.NewContext(browser)
+	proxy, err := netguard.StartProxy(policy)
+	if err != nil {
+		return Signal{}, err
+	}
+	defer proxy.Close()
+	tabCtx, cancelTab := chromedp.NewContext(browser, chromedp.WithNewBrowserContext(
+		func(p *target.CreateBrowserContextParams) *target.CreateBrowserContextParams {
+			// "<-loopback>" removes Chrome's implicit localhost bypass.
+			return p.WithProxyServer(proxy.URL()).WithProxyBypassList("<-loopback>")
+		}))
 	defer cancelTab()
 	tabCtx, cancelTimeout := context.WithTimeout(tabCtx, 45*time.Second)
 	defer cancelTimeout()
@@ -90,17 +110,22 @@ func FetchHTMLJS(ctx context.Context, pageURL string, policy netguard.Policy) (S
 		guardRequests(tabCtx, policy)
 		tasks = append(tasks, fetch.Enable())
 	}
+	if err := chromedp.Run(tabCtx, tasks); err != nil {
+		return Signal{}, renderErr(ctx, err)
+	}
+	resp, err := chromedp.RunResponse(tabCtx, chromedp.Navigate(pageURL))
+	if err != nil {
+		return Signal{}, renderErr(ctx, err)
+	}
+	if resp != nil && blockedByProxy(resp) {
+		return Signal{}, fmt.Errorf("%w: %s", netguard.ErrBlocked, resp.URL)
+	}
 	var title, body string
-	tasks = append(tasks,
-		chromedp.Navigate(pageURL),
+	if err := chromedp.Run(tabCtx,
 		chromedp.Title(&title),
 		chromedp.Evaluate(`document.body ? document.body.innerText : ""`, &body),
-	)
-	if err := chromedp.Run(tabCtx, tasks); err != nil {
-		if ctx.Err() != nil {
-			return Signal{}, ctx.Err()
-		}
-		return Signal{}, err
+	); err != nil {
+		return Signal{}, renderErr(ctx, err)
 	}
 	body = strings.Join(strings.Fields(body), " ")
 	return Signal{
@@ -110,6 +135,22 @@ func FetchHTMLJS(ctx context.Context, pageURL string, policy netguard.Policy) (S
 		Snippet: truncate(body, 500),
 		Fetched: time.Now().UTC(),
 	}, nil
+}
+
+func renderErr(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+func blockedByProxy(resp *network.Response) bool {
+	for k := range resp.Headers {
+		if strings.EqualFold(k, netguard.BlockedHeader) {
+			return true
+		}
+	}
+	return false
 }
 
 // guardRequests pauses each request via the Fetch domain and fails those whose
