@@ -10,8 +10,10 @@ import (
 )
 
 const (
-	DefaultLLMBaseURL = "https://opencode.ai/zen/go/v1"
-	DefaultLLMModel   = "mimo-v2.6-flash"
+	DefaultLLMBaseURL      = "https://opencode.ai/zen/go/v1"
+	DefaultLLMModel        = "mimo-v2.6-flash"
+	DefaultNewsNowBaseURL  = "https://newsnow.busiyi.world"
+	DefaultNewsNowInterval = 300 // seconds
 )
 
 // Config holds runtime settings loaded from the environment.
@@ -21,6 +23,10 @@ type Config struct {
 	LLMModel   string
 
 	RSSFeeds []string
+
+	NewsNowBaseURL     string
+	NewsNowIDs         []string
+	NewsNowMinInterval time.Duration
 
 	HTTPAddr string
 	RedisURL string
@@ -62,7 +68,31 @@ func Load() Config {
 		c.RSSFeeds = []string{"https://hnrss.org/frontpage"}
 	}
 
+	c.NewsNowBaseURL = envOr("AEGIS_NEWSNOW_BASE_URL", DefaultNewsNowBaseURL)
+	c.NewsNowMinInterval = time.Duration(envInt("AEGIS_NEWSNOW_MIN_INTERVAL_SEC", DefaultNewsNowInterval)) * time.Second
+	if !envBool("AEGIS_NEWSNOW_DISABLE", false) {
+		c.NewsNowIDs = newsNowIDsFromEnv()
+	}
+
 	return c
+}
+
+func newsNowIDsFromEnv() []string {
+	raw := os.Getenv("AEGIS_NEWSNOW_IDS")
+	if raw == "" {
+		return []string{"weibo", "zhihu", "baidu", "douyin", "toutiao", "thepaper"}
+	}
+	if strings.EqualFold(strings.TrimSpace(raw), "none") || raw == "-" {
+		return nil
+	}
+	var ids []string
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			ids = append(ids, p)
+		}
+	}
+	return ids
 }
 
 func llmAPIKeyFromEnv() string {

@@ -33,13 +33,7 @@ type Orchestrator struct {
 
 func NewOrchestrator(cfg config.Config, gate *approval.Gate, metrics *telemetry.Metrics, bus *agentbus.Bus, cases *casefile.Store, audit *rbac.AuditLog, deps *OrchestratorDeps) *Orchestrator {
 	ing := crawl.NewIngestor(cfg.CrawlParallelism)
-	reg := &social.Registry{
-		Sources: []social.Source{
-			&social.RSSSource{NameLabel: "rss", Feeds: cfg.RSSFeeds, Ingest: ing},
-			&social.StubSource{Platform: "x", EnvVars: []string{"X_API_BEARER_TOKEN", "X_API_KEY"}, Description: "Twitter/X API v2"},
-			&social.StubSource{Platform: "weibo", EnvVars: []string{"WEIBO_APP_KEY", "WEIBO_APP_SECRET"}, Description: "Weibo Open API"},
-		},
-	}
+	reg := social.DefaultRegistry(cfg, ing)
 	if bus == nil {
 		bus = agentbus.NewBus()
 	}

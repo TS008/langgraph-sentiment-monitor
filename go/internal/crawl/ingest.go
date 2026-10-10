@@ -19,6 +19,8 @@ type Signal struct {
 	URL     string    `json:"url"`
 	Title   string    `json:"title"`
 	Snippet string    `json:"snippet"`
+	Rank    int       `json:"rank,omitempty"`
+	Heat    string    `json:"heat,omitempty"`
 	Fetched time.Time `json:"fetched"`
 }
 

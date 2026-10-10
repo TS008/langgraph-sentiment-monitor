@@ -59,12 +59,17 @@ func (reg *Registry) Collect(ctx context.Context) ([]crawl.Signal, []string) {
 			continue
 		}
 		sigs, err := src.Fetch(ctx)
+		if len(sigs) > 0 {
+			all = append(all, sigs...)
+			notes = append(notes, fmt.Sprintf("%s: %d signals", src.Name(), len(sigs)))
+		}
 		if err != nil {
 			notes = append(notes, fmt.Sprintf("%s: %v", src.Name(), err))
 			continue
 		}
-		all = append(all, sigs...)
-		notes = append(notes, fmt.Sprintf("%s: %d signals", src.Name(), len(sigs)))
+		if len(sigs) == 0 {
+			notes = append(notes, fmt.Sprintf("%s: 0 signals", src.Name()))
+		}
 	}
 	return all, notes
 }

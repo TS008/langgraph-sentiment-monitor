@@ -50,6 +50,21 @@ Crisis handling is a **typed event bus** + **scoped case file** + **RBAC**, not 
 
 **Demo:** `go run ./cmd/aegis run` prints `agent_messages` and `audit_log` JSON. Commander UI shows bus + audit over SSE (`agent_message`, `audit` events).
 
+### NewsNow hot lists (China)
+
+Public [NewsNow](https://github.com/ourongxing/newsnow)-compatible API (`GET {base}/api/s?id=<id>`) ingests **Weibo, Zhihu, Douyin, Baidu, Toutiao, The Paper**, etc. without platform OAuth.
+
+| Env | Default |
+|-----|---------|
+| `AEGIS_NEWSNOW_BASE_URL` | `https://newsnow.busiyi.world` (swap for self-hosted) |
+| `AEGIS_NEWSNOW_IDS` | `weibo,zhihu,baidu,douyin,toutiao,thepaper` |
+| `AEGIS_NEWSNOW_MIN_INTERVAL_SEC` | `300` (per-id client cache) |
+| `AEGIS_NEWSNOW_DISABLE` | unset = enabled |
+
+Signals use `source=newsnow:<id>`, `rank`, `heat` (from `extra.info` when present). User-Agent `aegis-monitor/1.0`. Partial failure on one id does not block others.
+
+Live check: `AEGIS_INTEGRATION=1 go test -tags=integration ./internal/social/newsnow -run Live`.
+
 ```
 Orchestrator --task--> sentiment_sentinel --handoff--> … --> post_mortem_analyst
                  \___ casefile artifacts (by ref) ___/
