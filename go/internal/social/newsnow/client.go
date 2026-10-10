@@ -1,10 +1,12 @@
 package newsnow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,10 +24,12 @@ type Client struct {
 	HTTPClient  *http.Client
 	UserAgent   string
 	MinInterval time.Duration
+	Logger      *slog.Logger
 
 	mu        sync.Mutex
 	lastFetch map[string]time.Time
 	cache     map[string][]crawl.Signal
+	lastWarn  map[string]time.Time
 }
 
 func NewClient(baseURL string, minInterval time.Duration) *Client {
@@ -37,8 +41,10 @@ func NewClient(baseURL string, minInterval time.Duration) *Client {
 		HTTPClient:  &http.Client{Timeout: 20 * time.Second},
 		UserAgent:   DefaultUserAgent,
 		MinInterval: minInterval,
+		Logger:      slog.Default(),
 		lastFetch:   make(map[string]time.Time),
 		cache:       make(map[string][]crawl.Signal),
+		lastWarn:    make(map[string]time.Time),
 	}
 }
 
@@ -116,19 +122,26 @@ func (c *Client) fetchOne(ctx context.Context, id string) ([]crawl.Signal, error
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
+		c.logWarn(id, "request failed: "+err.Error())
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return nil, fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		msg := summarizeResponse(resp.StatusCode, resp.Header.Get("Content-Type"), body)
+		c.logWarn(id, msg)
+		return nil, fmt.Errorf("%s", msg)
 	}
 
 	var payload sourceResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, err
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&payload); err != nil {
+		msg := summarizeResponse(0, resp.Header.Get("Content-Type"), body)
+		c.logWarn(id, msg)
+		return nil, fmt.Errorf("%s", msg)
 	}
 	if len(payload.Items) == 0 {
+		c.logWarn(id, "empty items")
 		return nil, fmt.Errorf("empty items")
 	}
 
@@ -164,6 +177,39 @@ func (c *Client) fetchOne(ctx context.Context, id string) ([]crawl.Signal, error
 	c.mu.Unlock()
 
 	return signals, nil
+}
+
+func (c *Client) logWarn(id, msg string) {
+	c.mu.Lock()
+	if t, ok := c.lastWarn[id]; ok && time.Since(t) < c.MinInterval {
+		c.mu.Unlock()
+		return
+	}
+	c.lastWarn[id] = time.Now()
+	c.mu.Unlock()
+	if c.Logger != nil {
+		c.Logger.Warn("newsnow fetch", "id", id, "base", c.BaseURL, "detail", msg)
+	}
+}
+
+// summarizeResponse builds a short error string without dumping HTML bodies.
+func summarizeResponse(status int, contentType string, body []byte) string {
+	if status == http.StatusForbidden {
+		return "http 403 (blocked; run self-hosted NewsNow via docker compose)"
+	}
+	if status > 0 {
+		return fmt.Sprintf("http %d", status)
+	}
+	ct := strings.ToLower(contentType)
+	if strings.Contains(ct, "text/html") || looksLikeHTML(body) {
+		return "non-JSON response (HTML error page)"
+	}
+	return "invalid JSON response"
+}
+
+func looksLikeHTML(b []byte) bool {
+	s := strings.TrimSpace(string(b))
+	return strings.HasPrefix(s, "<!") || strings.Contains(s, "<html")
 }
 
 func formatHeat(extra *struct {

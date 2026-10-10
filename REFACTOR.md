@@ -52,18 +52,34 @@ Crisis handling is a **typed event bus** + **scoped case file** + **RBAC**, not 
 
 ### NewsNow hot lists (China)
 
-Public [NewsNow](https://github.com/ourongxing/newsnow)-compatible API (`GET {base}/api/s?id=<id>`) ingests **Weibo, Zhihu, Douyin, Baidu, Toutiao, The Paper**, etc. without platform OAuth.
+[NewsNow](https://github.com/ourongxing/newsnow) API (`GET {base}/api/s?id=<id>`) ingests **Weibo, Zhihu, Douyin, Baidu, Toutiao, The Paper**, etc. without platform OAuth.
+
+**Self-hosted (recommended):** the public host `newsnow.busiyi.world` is often **HTTP 403 / Cloudflare** from datacenter IPs. Run the official image from repo `docker-compose.yml`:
+
+```bash
+docker compose up -d newsnow
+export AEGIS_NEWSNOW_BASE_URL=http://127.0.0.1:4444
+cd go && go run ./cmd/aegis run
+```
+
+Image: `ghcr.io/ourongxing/newsnow:latest` (port **4444**).
 
 | Env | Default |
 |-----|---------|
-| `AEGIS_NEWSNOW_BASE_URL` | `https://newsnow.busiyi.world` (swap for self-hosted) |
+| `AEGIS_NEWSNOW_BASE_URL` | `http://127.0.0.1:4444` |
 | `AEGIS_NEWSNOW_IDS` | `weibo,zhihu,baidu,douyin,toutiao,thepaper` |
-| `AEGIS_NEWSNOW_MIN_INTERVAL_SEC` | `300` (per-id client cache) |
+| `AEGIS_NEWSNOW_MIN_INTERVAL_SEC` | `300` (per-id cache + warn throttle) |
 | `AEGIS_NEWSNOW_DISABLE` | unset = enabled |
 
-Signals use `source=newsnow:<id>`, `rank`, `heat` (from `extra.info` when present). User-Agent `aegis-monitor/1.0`. Partial failure on one id does not block others.
+On 403 or HTML error pages, AEGIS logs **one concise `slog` warning per id per interval** (no HTML dump) and continues with RSS/other sources.
 
-Live check: `AEGIS_INTEGRATION=1 go test -tags=integration ./internal/social/newsnow -run Live`.
+Live check (fails if **zero** ids succeed):
+
+```bash
+docker compose up -d newsnow
+AEGIS_INTEGRATION=1 AEGIS_NEWSNOW_BASE_URL=http://127.0.0.1:4444 \
+  go test -tags=integration ./internal/social/newsnow -run Live -timeout 3m
+```
 
 ```
 Orchestrator --task--> sentiment_sentinel --handoff--> … --> post_mortem_analyst

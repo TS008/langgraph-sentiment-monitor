@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,7 +29,9 @@ func TestClientFetchIDsHermetic(t *testing.T) {
 		case "weibo":
 			w.Write([]byte(fixtureWeibo))
 		case "zhihu":
-			w.WriteHeader(http.StatusInternalServerError)
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("<!DOCTYPE html><html>blocked</html>"))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -62,6 +65,16 @@ func TestClientRateLimitUsesCache(t *testing.T) {
 	_, _ = c.FetchIDs(ctx, []string{"weibo"})
 	if calls != 1 {
 		t.Fatalf("expected 1 http call due to cache, got %d", calls)
+	}
+}
+
+func TestSummarizeResponseNoHTMLDump(t *testing.T) {
+	msg := summarizeResponse(403, "text/html", []byte("<!DOCTYPE html><title>blocked</title>"))
+	if strings.Contains(msg, "<!DOCTYPE") {
+		t.Fatal("should not embed HTML")
+	}
+	if !strings.Contains(msg, "403") {
+		t.Fatal(msg)
 	}
 }
 

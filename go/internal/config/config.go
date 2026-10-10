@@ -12,7 +12,8 @@ import (
 const (
 	DefaultLLMBaseURL      = "https://opencode.ai/zen/go/v1"
 	DefaultLLMModel        = "mimo-v2.6-flash"
-	DefaultNewsNowBaseURL  = "https://newsnow.busiyi.world"
+	// Self-hosted via docker-compose (see repo docker-compose.yml). Public busiyi.world is often Cloudflare-blocked.
+	DefaultNewsNowBaseURL = "http://127.0.0.1:4444"
 	DefaultNewsNowInterval = 300 // seconds
 )
 

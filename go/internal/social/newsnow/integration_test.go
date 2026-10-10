@@ -17,15 +17,26 @@ func TestNewsNowLiveIDs(t *testing.T) {
 	}
 	cfg := config.Load()
 	c := NewClient(cfg.NewsNowBaseURL, 0)
-	ids := []string{"weibo", "zhihu", "douyin", "baidu", "toutiao", "thepaper"}
+	ids := cfg.NewsNowIDs
+	if len(ids) == 0 {
+		ids = []string{"weibo", "zhihu", "douyin", "baidu", "toutiao", "thepaper"}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+
+	var ok, fail int
 	for _, id := range ids {
 		sigs, err := c.fetchOne(ctx, id)
 		if err != nil {
-			t.Logf("id %s: FAIL %v", id, err)
+			fail++
+			t.Logf("FAIL %s: %v", id, err)
 			continue
 		}
-		t.Logf("id %s: OK %d items", id, len(sigs))
+		ok++
+		t.Logf("OK   %s: %d items", id, len(sigs))
+	}
+	t.Logf("NewsNow summary at %s: %d/%d ids succeeded", cfg.NewsNowBaseURL, ok, len(ids))
+	if ok == 0 {
+		t.Fatalf("no newsnow ids succeeded (start self-hosted: docker compose up -d newsnow)")
 	}
 }
