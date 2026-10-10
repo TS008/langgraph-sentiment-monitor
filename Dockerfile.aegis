@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+# AEGIS Go API (lean; no Chromium). Build from repo root:
+#   docker build -f Dockerfile.aegis -t aegis:local .
+# Optional JS crawl: see deploy/aegis/Dockerfile.chromium (not used by default).
+
+FROM golang:1.24-alpine AS build
+RUN apk add --no-cache git ca-certificates
+WORKDIR /src/go
+COPY go/go.mod go/go.sum ./
+RUN go mod download
+COPY go/ .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /aegis ./cmd/aegis
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata
+COPY --from=build /aegis /usr/local/bin/aegis
+
+ENV PORT=8080
+ENV AEGIS_HTTP_ADDR=:8080
+ENV AEGIS_QUEUE_MODE=memory
+# NewsNow sidecar is not in this image; use RSS + external NewsNow URL or disable.
+ENV AEGIS_NEWSNOW_DISABLE=true
+
+EXPOSE 8080
+USER nobody
+CMD ["aegis", "serve"]

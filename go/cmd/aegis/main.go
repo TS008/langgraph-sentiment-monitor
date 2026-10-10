@@ -77,6 +77,8 @@ func runServe(args []string) {
 	cfg := config.Load()
 	if *addr != "" {
 		cfg.HTTPAddr = *addr
+	} else if p := os.Getenv("PORT"); p != "" {
+		cfg.HTTPAddr = ":" + p
 	}
 
 	srv, q, _, metrics := newApp(cfg)

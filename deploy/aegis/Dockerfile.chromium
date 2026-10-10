@@ -1,0 +1,23 @@
+# Optional heavier image with Chromium for AEGIS_CRAWL_JS_RENDER / chromedp.
+# Build from repo root (requires Go 1.24+ and chromedp build tag):
+#
+#   docker build -f deploy/aegis/Dockerfile.chromium -t aegis:chromium .
+#
+# Not wired into Cloudflare Containers by default (image size + sandbox limits).
+
+FROM golang:1.24-alpine AS build
+RUN apk add --no-cache git ca-certificates
+WORKDIR /src/go
+COPY go/go.mod go/go.sum ./
+RUN go mod download
+COPY go/ .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags chromedp -ldflags="-s -w" -o /aegis ./cmd/aegis
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata chromium
+ENV CHROME_PATH=/usr/bin/chromium-browser
+COPY --from=build /aegis /usr/local/bin/aegis
+ENV PORT=8080 AEGIS_HTTP_ADDR=:8080 AEGIS_CRAWL_JS_RENDER=true
+EXPOSE 8080
+USER nobody
+CMD ["aegis", "serve"]

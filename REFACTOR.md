@@ -88,6 +88,29 @@ Orchestrator --task--> sentiment_sentinel --handoff--> … --> post_mortem_analy
 
 Optional **chromedp** fetch for a single HTML URL. Optional **asynq** worker for async runs (same orchestrator; bus stays in-process on the worker).
 
+## Cloudflare Containers deploy
+
+Package **`aegis serve`** + commander UI for a public `*.workers.dev` URL (Worker proxies to the Go container).
+
+| Artifact | Purpose |
+|----------|---------|
+| `Dockerfile.aegis` | Multi-stage lean image (no Chromium); listens on `$PORT` / `:8080` |
+| `cloudflare/wrangler.jsonc` | Worker + `AegisContainer` durable object |
+| `cloudflare/README.md` | Full deploy steps |
+
+```bash
+cd cloudflare && npm install
+npx wrangler secret put OPENCODE_GO_API_KEY
+npx wrangler deploy
+# → https://aegis-monitor.<subdomain>.workers.dev/commander
+```
+
+- Probes: **`GET /healthz`** (alias of `/health`)
+- Image defaults: `AEGIS_NEWSNOW_DISABLE=true`, `AEGIS_QUEUE_MODE=memory` — set Worker secret `AEGIS_NEWSNOW_BASE_URL` to an external self-hosted NewsNow if needed
+- Optional Chromium image: `deploy/aegis/Dockerfile.chromium` (not used by default on Cloudflare)
+
+Requires **Docker** locally for `wrangler deploy` image build. This agent environment cannot run Docker/Wrangler auth; follow `cloudflare/README.md` on your machine.
+
 ## Run
 
 Prerequisites: Go 1.24+ (see `go/go.mod`; use `GOTOOLCHAIN=auto`)

@@ -89,6 +89,7 @@ func (s *Server) Router() http.Handler {
 	r.Get("/commander/events", s.handleSSE)
 
 	r.Get("/health", s.handleHealth)
+	r.Get("/healthz", s.handleHealth)
 	r.Handle("/metrics", s.metrics.Handler())
 	r.Post("/api/v1/runs", s.handleCreateRun)
 	r.Get("/api/v1/runs/{id}", s.handleGetRun)
