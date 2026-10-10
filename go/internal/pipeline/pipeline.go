@@ -46,27 +46,27 @@ type StageLog struct {
 
 // RunResult is the full output of one pipeline execution.
 type RunResult struct {
-	ID             string                `json:"id"`
-	Status         string                `json:"status"`
-	Checkpoint     string                `json:"checkpoint"`
-	StartedAt      time.Time             `json:"started_at"`
-	FinishedAt     time.Time             `json:"finished_at"`
-	Signals        []crawl.Signal        `json:"signals"`
-	IngestNotes    []string              `json:"ingest_notes,omitempty"`
-	Sentiment      llm.SentimentResult   `json:"sentiment"`
-	Diagnosis      string                `json:"diagnosis"`
-	Strategy       string                `json:"strategy"`
-	LegalReview    string                `json:"legal_review"`
-	Approval       approval.Decision     `json:"approval"`
-	ActionStub     string                `json:"action_stub"`
-	Feedback       string                `json:"realtime_sentiment"`
-	StatusCheck    string                `json:"status_check"`
-	CrisisResolved bool                  `json:"crisis_resolved"`
-	PostMortem     string                `json:"post_mortem"`
-	Stages         []StageLog            `json:"stages"`
-	AgentMessages  []agentbus.Envelope   `json:"agent_messages"`
-	AuditLog       []rbac.AuditRecord    `json:"audit_log"`
-	Error          string                `json:"error,omitempty"`
+	ID             string              `json:"id"`
+	Status         string              `json:"status"`
+	Checkpoint     string              `json:"checkpoint"`
+	StartedAt      time.Time           `json:"started_at"`
+	FinishedAt     time.Time           `json:"finished_at"`
+	Signals        []crawl.Signal      `json:"signals"`
+	IngestNotes    []string            `json:"ingest_notes,omitempty"`
+	Sentiment      llm.SentimentResult `json:"sentiment"`
+	Diagnosis      string              `json:"diagnosis"`
+	Strategy       string              `json:"strategy"`
+	LegalReview    string              `json:"legal_review"`
+	Approval       approval.Decision   `json:"approval"`
+	ActionStub     string              `json:"action_stub"`
+	Feedback       string              `json:"realtime_sentiment"`
+	StatusCheck    string              `json:"status_check"`
+	CrisisResolved bool                `json:"crisis_resolved"`
+	PostMortem     string              `json:"post_mortem"`
+	Stages         []StageLog          `json:"stages"`
+	AgentMessages  []agentbus.Envelope `json:"agent_messages"`
+	AuditLog       []rbac.AuditRecord  `json:"audit_log"`
+	Error          string              `json:"error,omitempty"`
 }
 
 // OnProgress is called after each stage (for SSE / store updates).
@@ -78,9 +78,14 @@ type Runner struct {
 }
 
 func NewRunner(cfg config.Config, gate *approval.Gate, metrics *telemetry.Metrics) *Runner {
+	return NewRunnerWithDeps(cfg, gate, metrics, nil)
+}
+
+// NewRunnerWithDeps is NewRunner with injectable collaborators (tests, custom sources).
+func NewRunnerWithDeps(cfg config.Config, gate *approval.Gate, metrics *telemetry.Metrics, deps *OrchestratorDeps) *Runner {
 	bus := agentbus.NewBus()
 	return &Runner{
-		orch: NewOrchestrator(cfg, gate, metrics, bus, nil, nil, nil),
+		orch: NewOrchestrator(cfg, gate, metrics, bus, nil, nil, deps),
 	}
 }
 

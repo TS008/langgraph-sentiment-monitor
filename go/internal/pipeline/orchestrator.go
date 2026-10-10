@@ -132,10 +132,14 @@ func (o *Orchestrator) Execute(ctx context.Context, opts RunOptions, onProgress 
 	logStage(StageMonitor, fmt.Sprintf("Ingested %d signals", len(signals)), t0)
 	_ = rt.PublishHandoff(agentbus.AgentSentinel, agentbus.AgentSentiment, "signals:"+artID, []string{artID})
 
-	llmCtx, cancel := context.WithTimeout(ctx, o.cfg.LLMTimeout)
-	defer cancel()
-	llmCtx = llm.WithSession(llmCtx, runID)
 	corpus := buildCorpus(signals)
+	llmCall := func() (context.Context, context.CancelFunc) {
+		c, cancel := ctx, context.CancelFunc(func() {})
+		if o.cfg.LLMTimeout > 0 {
+			c, cancel = context.WithTimeout(ctx, o.cfg.LLMTimeout)
+		}
+		return llm.WithSession(c, runID), cancel
+	}
 
 	// --- Sentiment ---
 	t0 = time.Now().UTC()
@@ -149,7 +153,7 @@ func (o *Orchestrator) Execute(ctx context.Context, opts RunOptions, onProgress 
 	if o.metrics != nil {
 		o.metrics.LLMCalls.Add(1)
 	}
-	sent, err := o.llm.AnalyzeSignals(llmCtx, promptCtx+"\n"+corpus)
+	sent, err := o.analyze(llmCall, promptCtx+"\n"+corpus)
 	if err != nil {
 		res.Error = err.Error()
 		res.Status = "failed"
@@ -171,7 +175,7 @@ func (o *Orchestrator) Execute(ctx context.Context, opts RunOptions, onProgress 
 	if o.metrics != nil {
 		o.metrics.LLMCalls.Add(1)
 	}
-	diag, err := o.llm.Complete(llmCtx, "Chief technical diagnostician.", diagView+"\nProvide root-cause hypotheses and mitigation.")
+	diag, err := o.complete(llmCall, "Chief technical diagnostician.", diagView+"\nProvide root-cause hypotheses and mitigation.")
 	if err != nil {
 		res.Error = err.Error()
 		res.Status = "failed"
@@ -192,7 +196,7 @@ func (o *Orchestrator) Execute(ctx context.Context, opts RunOptions, onProgress 
 	if o.metrics != nil {
 		o.metrics.LLMCalls.Add(1)
 	}
-	strat, err := o.llm.Complete(llmCtx, "Senior PR strategist.", stratView+"\nDraft 3-bullet crisis comms plan.")
+	strat, err := o.complete(llmCall, "Senior PR strategist.", stratView+"\nDraft 3-bullet crisis comms plan.")
 	if err != nil {
 		res.Error = err.Error()
 		res.Status = "failed"
@@ -213,7 +217,7 @@ func (o *Orchestrator) Execute(ctx context.Context, opts RunOptions, onProgress 
 	if o.metrics != nil {
 		o.metrics.LLMCalls.Add(1)
 	}
-	legal, err := o.llm.Complete(llmCtx, "Legal counsel.", legView+"\nSummarize legal risk and compliance.")
+	legal, err := o.complete(llmCall, "Legal counsel.", legView+"\nSummarize legal risk and compliance.")
 	if err != nil {
 		res.Error = err.Error()
 		res.Status = "failed"
@@ -266,7 +270,7 @@ func (o *Orchestrator) Execute(ctx context.Context, opts RunOptions, onProgress 
 	if o.metrics != nil {
 		o.metrics.LLMCalls.Add(1)
 	}
-	fb, _ := o.llm.Complete(llmCtx, "Sentiment sentinel.", "Actions: "+res.ActionStub+"\nExpected short-term sentiment shift?")
+	fb, _ := o.complete(llmCall, "Sentiment sentinel.", "Actions: "+res.ActionStub+"\nExpected short-term sentiment shift?")
 	res.Feedback = fb
 	_, fbArt := o.cases.Put(runID, casefile.SlotFeedback, truncate(fb, 200), fb, agentbus.AgentFeedback)
 	_ = rt.PublishArtifact(agentbus.AgentFeedback, fbArt)
@@ -292,7 +296,7 @@ func (o *Orchestrator) Execute(ctx context.Context, opts RunOptions, onProgress 
 	if o.metrics != nil {
 		o.metrics.LLMCalls.Add(1)
 	}
-	pm, _ := o.llm.Complete(llmCtx, "Post-mortem analyst.", "Summary: "+sent.Summary+"\nThree lessons learned.")
+	pm, _ := o.complete(llmCall, "Post-mortem analyst.", "Summary: "+sent.Summary+"\nThree lessons learned.")
 	res.PostMortem = pm
 	_, pmArt := o.cases.Put(runID, casefile.SlotPostMortem, truncate(pm, 200), pm, agentbus.AgentPostMortem)
 	_ = rt.PublishArtifact(agentbus.AgentPostMortem, pmArt)
@@ -320,6 +324,20 @@ func finish(o *Orchestrator, res *RunResult, emit func()) RunResult {
 	o.cases.Delete(res.ID)
 	o.audit.Delete(res.ID)
 	return *res
+}
+
+// Each LLM call gets its own AEGIS_LLM_TIMEOUT_SEC budget so a slow early stage
+// cannot starve later stages.
+func (o *Orchestrator) analyze(newCtx func() (context.Context, context.CancelFunc), corpus string) (llm.SentimentResult, error) {
+	ctx, cancel := newCtx()
+	defer cancel()
+	return o.llm.AnalyzeSignals(ctx, corpus)
+}
+
+func (o *Orchestrator) complete(newCtx func() (context.Context, context.CancelFunc), system, user string) (string, error) {
+	ctx, cancel := newCtx()
+	defer cancel()
+	return o.llm.Complete(ctx, system, user)
 }
 
 func rbacAllow(agent agentbus.AgentID, tool rbac.Tool) error {

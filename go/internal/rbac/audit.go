@@ -10,13 +10,13 @@ import (
 
 // AuditRecord is an immutable permission / action log entry.
 type AuditRecord struct {
-	ID        string           `json:"id"`
-	RunID     string           `json:"run_id"`
-	At        time.Time        `json:"at"`
-	Agent     agentbus.AgentID `json:"agent"`
-	Tool      Tool             `json:"tool"`
-	Allowed   bool             `json:"allowed"`
-	Detail    string           `json:"detail"`
+	ID      string           `json:"id"`
+	RunID   string           `json:"run_id"`
+	At      time.Time        `json:"at"`
+	Agent   agentbus.AgentID `json:"agent"`
+	Tool    Tool             `json:"tool"`
+	Allowed bool             `json:"allowed"`
+	Detail  string           `json:"detail"`
 }
 
 // AuditLog stores append-only records per run.

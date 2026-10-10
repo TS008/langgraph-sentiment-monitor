@@ -86,11 +86,16 @@ func runServe(args []string) {
 		defer c.Close()
 	}
 
+	// No Read/WriteTimeout: SSE streams and synchronous runs are long-lived, and
+	// ReadTimeout would cancel their request contexts. Bodies are capped per handler.
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
 	}
+	httpSrv.RegisterOnShutdown(srv.CloseStreams)
 
 	go func() {
 		slog.Info("aegis_listen", "addr", cfg.HTTPAddr, "llm", cfg.LLMEnabled(), "queue", q.Mode(), "model", cfg.LLMModel)
@@ -105,6 +110,11 @@ func runServe(args []string) {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelDrain()
+	if err := srv.Shutdown(drainCtx); err != nil {
+		slog.Warn("aegis_shutdown", "detail", "in-flight runs cancelled", "err", err)
+	}
 	_ = metrics
 }
 

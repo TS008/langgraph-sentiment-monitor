@@ -11,24 +11,24 @@ import (
 
 // Artifact is a bounded chunk of run state (reference by id in handoffs).
 type Artifact struct {
-	ID       string           `json:"id"`
-	Slot     Slot             `json:"slot"`
-	Summary  string           `json:"summary"`
-	Payload  json.RawMessage  `json:"payload,omitempty"`
-	Author   agentbus.AgentID `json:"author"`
+	ID      string           `json:"id"`
+	Slot    Slot             `json:"slot"`
+	Summary string           `json:"summary"`
+	Payload json.RawMessage  `json:"payload,omitempty"`
+	Author  agentbus.AgentID `json:"author"`
 }
 
 // RunState is checkpoint-friendly case file for one crisis run.
 type RunState struct {
-	RunID      string             `json:"run_id"`
-	Checkpoint agentbus.AgentID   `json:"checkpoint"`
+	RunID      string              `json:"run_id"`
+	Checkpoint agentbus.AgentID    `json:"checkpoint"`
 	Artifacts  map[string]Artifact `json:"artifacts"`
 }
 
 // Store holds in-memory case files (v1; swap for Redis/DB later).
 type Store struct {
-	mu    sync.RWMutex
-	runs  map[string]*RunState
+	mu   sync.RWMutex
+	runs map[string]*RunState
 }
 
 func NewStore() *Store {
