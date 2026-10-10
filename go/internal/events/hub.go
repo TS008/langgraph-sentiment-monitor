@@ -7,9 +7,9 @@ import (
 
 // Event is pushed to commander UI subscribers (SSE).
 type Event struct {
-	Type   string `json:"type"`
-	RunID  string `json:"run_id,omitempty"`
-	Stage  string `json:"stage,omitempty"`
+	Type    string `json:"type"`
+	RunID   string `json:"run_id,omitempty"`
+	Stage   string `json:"stage,omitempty"`
 	Message string `json:"message,omitempty"`
 }
 
@@ -24,6 +24,12 @@ func NewHub() *Hub {
 }
 
 func (h *Hub) Publish(ev Event) {
+	h.mu.RLock()
+	if len(h.clients) == 0 {
+		h.mu.RUnlock()
+		return
+	}
+	h.mu.RUnlock()
 	data, _ := json.Marshal(ev)
 	h.mu.RLock()
 	for ch := range h.clients {

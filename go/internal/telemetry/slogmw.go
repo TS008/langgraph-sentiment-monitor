@@ -18,7 +18,12 @@ func SlogMiddleware(logger *slog.Logger, m *Metrics) func(http.Handler) http.Han
 			if m != nil {
 				m.HTTPRequests.Add(1)
 			}
-			logger.Info("http",
+			// Container readiness probes hit health endpoints every few seconds.
+			level := slog.LevelInfo
+			if r.URL.Path == "/healthz" || r.URL.Path == "/health" {
+				level = slog.LevelDebug
+			}
+			logger.Log(r.Context(), level, "http",
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", ww.Status(),

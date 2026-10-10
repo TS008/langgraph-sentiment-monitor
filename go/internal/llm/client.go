@@ -62,7 +62,7 @@ Signals:
 		MaxTokens:   600,
 	})
 	if err != nil {
-		if isRetryableLLMError(err) {
+		if isAuthError(err) {
 			return heuristicAnalyze(corpus), nil
 		}
 		return SentimentResult{}, err
@@ -101,7 +101,7 @@ func (c *Client) Complete(ctx context.Context, system string, user string) (stri
 		MaxTokens:   800,
 	})
 	if err != nil {
-		if isRetryableLLMError(err) {
+		if isAuthError(err) {
 			return "[offline-fallback] " + truncate(user, 300), nil
 		}
 		return "", err
@@ -112,7 +112,9 @@ func (c *Client) Complete(ctx context.Context, system string, user string) (stri
 	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
 }
 
-func isRetryableLLMError(err error) bool {
+// isAuthError reports credential failures, which degrade to offline output
+// (transient 429/5xx are retried in the transport instead).
+func isAuthError(err error) bool {
 	if err == nil {
 		return false
 	}

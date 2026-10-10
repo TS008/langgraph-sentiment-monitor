@@ -265,6 +265,18 @@ func (o *Orchestrator) Execute(ctx context.Context, opts RunOptions, onProgress 
 	logStage(StageAction, res.ActionStub, t0)
 	_ = rt.PublishHandoff(agentbus.AgentAction, agentbus.AgentFeedback, "measure sentiment", []string{actArt.ID})
 
+	// Post-mortem only needs the sentiment summary, so its LLM call overlaps
+	// feedback and status; results are still recorded in stage order below.
+	pmStart := time.Now().UTC()
+	pmCh := make(chan string, 1)
+	if o.metrics != nil {
+		o.metrics.LLMCalls.Add(1)
+	}
+	go func() {
+		pm, _ := o.complete(llmCall, "Post-mortem analyst.", "Summary: "+sent.Summary+"\nThree lessons learned.")
+		pmCh <- pm
+	}()
+
 	// --- Feedback ---
 	t0 = time.Now().UTC()
 	if o.metrics != nil {
@@ -292,11 +304,8 @@ func (o *Orchestrator) Execute(ctx context.Context, opts RunOptions, onProgress 
 	_ = rt.PublishHandoff(agentbus.AgentStatus, agentbus.AgentPostMortem, res.StatusCheck, []string{stArt.ID})
 
 	// --- Post-mortem ---
-	t0 = time.Now().UTC()
-	if o.metrics != nil {
-		o.metrics.LLMCalls.Add(1)
-	}
-	pm, _ := o.complete(llmCall, "Post-mortem analyst.", "Summary: "+sent.Summary+"\nThree lessons learned.")
+	t0 = pmStart
+	pm := <-pmCh
 	res.PostMortem = pm
 	_, pmArt := o.cases.Put(runID, casefile.SlotPostMortem, truncate(pm, 200), pm, agentbus.AgentPostMortem)
 	_ = rt.PublishArtifact(agentbus.AgentPostMortem, pmArt)
