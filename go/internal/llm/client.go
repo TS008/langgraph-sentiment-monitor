@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/config"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/textutil"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -148,8 +149,5 @@ func heuristicAnalyze(corpus string) SentimentResult {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
+	return textutil.Truncate(s, n)
 }

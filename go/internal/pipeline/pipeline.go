@@ -13,6 +13,7 @@ import (
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/llm"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/rbac"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/telemetry"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/textutil"
 )
 
 // Stage names mirror the legacy LangGraph agent flow.
@@ -98,21 +99,42 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions, onProgress OnProgress
 	return r.orch.Execute(ctx, opts, onProgress)
 }
 
+const maxCorpusSignals = 20
+
+// buildCorpus samples signals round-robin across sources (in first-seen order)
+// so one large source such as RSS can't crowd hot lists out of the prompt.
 func buildCorpus(signals []crawl.Signal) string {
+	var order []string
+	bySource := make(map[string][]crawl.Signal)
+	for _, s := range signals {
+		if _, ok := bySource[s.Source]; !ok {
+			order = append(order, s.Source)
+		}
+		bySource[s.Source] = append(bySource[s.Source], s)
+	}
 	var b strings.Builder
-	for i, s := range signals {
-		if i >= 20 {
+	written := 0
+	for round := 0; written < maxCorpusSignals; round++ {
+		progressed := false
+		for _, src := range order {
+			list := bySource[src]
+			if round >= len(list) {
+				continue
+			}
+			s := list[round]
+			fmt.Fprintf(&b, "- [%s] %s — %s\n", s.Source, s.Title, s.Snippet)
+			progressed = true
+			if written++; written >= maxCorpusSignals {
+				break
+			}
+		}
+		if !progressed {
 			break
 		}
-		fmt.Fprintf(&b, "- [%s] %s — %s\n", s.Source, s.Title, s.Snippet)
 	}
 	return b.String()
 }
 
 func truncate(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
+	return textutil.Truncate(strings.TrimSpace(s), n)
 }

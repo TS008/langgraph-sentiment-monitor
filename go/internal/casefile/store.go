@@ -2,6 +2,7 @@ package casefile
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -136,18 +137,27 @@ func slotsForRole(role rbac.Role) map[Slot]bool {
 	}
 }
 
+// slotOrder fixes prompt layout to pipeline order so summaries are stable across
+// runs (deterministic prompts, better provider-side prompt caching).
+var slotOrder = []Slot{SlotSignals, SlotSentiment, SlotDiagnosis, SlotStrategy, SlotLegal, SlotApproval, SlotAction, SlotFeedback, SlotStatus, SlotPostMortem}
+
 // HandoffSummary builds a compact string for LLM prompts from scoped view.
+// Slots that would exceed maxLen are skipped so later, shorter slots still fit.
 func HandoffSummary(view map[Slot]string, maxLen int) string {
 	if len(view) == 0 {
 		return ""
 	}
-	var b []byte
-	for slot, sum := range view {
-		line := string(slot) + ": " + sum + "\n"
-		if len(b)+len(line) > maxLen {
-			break
+	var b strings.Builder
+	for _, slot := range slotOrder {
+		sum, ok := view[slot]
+		if !ok {
+			continue
 		}
-		b = append(b, line...)
+		line := string(slot) + ": " + sum + "\n"
+		if b.Len()+len(line) > maxLen {
+			continue
+		}
+		b.WriteString(line)
 	}
-	return string(b)
+	return b.String()
 }
