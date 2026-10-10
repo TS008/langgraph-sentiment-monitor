@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aegis-monitor",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-10-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  // Build the Go image from repository root (parent of cloudflare/).
+  "containers": [
+    {
+      "class_name": "AegisContainer",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "dockerfile": "../Dockerfile.aegis",
+          "build_context": ".."
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "AegisContainer",
+        "name": "AEGIS"
+      }
+    ]
+  },
+  "exports": {
+    "AegisContainer": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
+}

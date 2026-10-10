@@ -1,0 +1,34 @@
+# Optional stack for AEGIS: Redis (asynq) + self-hosted NewsNow hot-list API.
+#
+# NewsNow: https://github.com/ourongxing/newsnow
+# After `docker compose up -d newsnow`, set:
+#   AEGIS_NEWSNOW_BASE_URL=http://127.0.0.1:4444
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - aegis_redis_data:/data
+
+  newsnow:
+    image: ghcr.io/ourongxing/newsnow:latest
+    container_name: aegis-newsnow
+    ports:
+      - "4444:4444"
+    volumes:
+      - aegis_newsnow_data:/usr/app/.data
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "4444"
+      NODE_ENV: production
+      INIT_TABLE: "true"
+      ENABLE_CACHE: "true"
+      # OAuth optional for AEGIS ingest (public /api/s works without login)
+      G_CLIENT_ID: ""
+      G_CLIENT_SECRET: ""
+      JWT_SECRET: ""
+
+volumes:
+  aegis_redis_data:
+  aegis_newsnow_data:

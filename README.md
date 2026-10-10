@@ -28,7 +28,11 @@
 - **指令控制台**：总指挥官可随时下达指令
 - **危机状态确认**：支持确认危机是否已解决
 
-## 🚀 快速开始
+## Go refactor (recommended for new work)
+
+Branch **`refactor/go-highperf`** adds a Go-first, high-concurrency stack under [`go/`](go/) (OpenCode Go LLM, commander UI, optional Redis/asynq). See **[REFACTOR.md](REFACTOR.md)** for env vars and run commands. Legacy Python: [`legacy-python/README.md`](legacy-python/README.md).
+
+## 🚀 快速开始 (legacy Python)
 
 ### 前置要求
 - Python 3.8+
