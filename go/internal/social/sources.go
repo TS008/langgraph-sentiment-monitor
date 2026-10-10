@@ -3,6 +3,7 @@ package social
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/crawl"
 )
@@ -50,15 +51,34 @@ type Registry struct {
 	Sources []Source
 }
 
+// Collect fetches all ready sources concurrently; results and notes keep source order.
 func (reg *Registry) Collect(ctx context.Context) ([]crawl.Signal, []string) {
+	type result struct {
+		sigs []crawl.Signal
+		err  error
+	}
+	results := make([]result, len(reg.Sources))
+	var wg sync.WaitGroup
+	for i, src := range reg.Sources {
+		if !src.Ready() {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, src Source) {
+			defer wg.Done()
+			results[i].sigs, results[i].err = src.Fetch(ctx)
+		}(i, src)
+	}
+	wg.Wait()
+
 	var all []crawl.Signal
 	var notes []string
-	for _, src := range reg.Sources {
+	for i, src := range reg.Sources {
 		if !src.Ready() {
 			notes = append(notes, fmt.Sprintf("%s: skipped (not configured)", src.Name()))
 			continue
 		}
-		sigs, err := src.Fetch(ctx)
+		sigs, err := results[i].sigs, results[i].err
 		if len(sigs) > 0 {
 			all = append(all, sigs...)
 			notes = append(notes, fmt.Sprintf("%s: %d signals", src.Name(), len(sigs)))

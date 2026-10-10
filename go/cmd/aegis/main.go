@@ -17,6 +17,7 @@ import (
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/api"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/approval"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/config"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/crawl"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/events"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/queue"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/store"
@@ -115,6 +116,7 @@ func runServe(args []string) {
 	if err := srv.Shutdown(drainCtx); err != nil {
 		slog.Warn("aegis_shutdown", "detail", "in-flight runs cancelled", "err", err)
 	}
+	crawl.CloseBrowser()
 	_ = metrics
 }
 
@@ -152,6 +154,7 @@ func runOnce(args []string) {
 	defer cancel()
 
 	res := srv.RunOnce(ctx, *url, *js || cfg.UseJSRender)
+	crawl.CloseBrowser()
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(res); err != nil {
