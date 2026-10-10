@@ -16,6 +16,7 @@ import (
 
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/api"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/approval"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/cluster"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/config"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/crawl"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/events"
@@ -52,25 +53,73 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "  aegis worker             Asynq worker (requires Redis)\n")
 }
 
-func newApp(cfg config.Config) (*api.Server, queue.Enqueuer, *events.Hub, *telemetry.Metrics) {
+type role int
+
+const (
+	roleServe role = iota
+	roleWorker
+	roleRun
+)
+
+type app struct {
+	srv   *api.Server
+	queue queue.Enqueuer
+	close func()
+}
+
+// newApp wires one process. In asynq mode the API (serve) and workers share run
+// results, SSE events and approvals through Redis; `run` is always in-process.
+func newApp(cfg config.Config, r role) *app {
 	if _, err := cfg.FetchPolicy(); err != nil {
 		log.Fatal(err)
 	}
-	st := store.NewMemoryRunStore(cfg.MaxRetainedRuns)
 	gate := approval.NewGate(cfg.ApprovalTimeout)
 	hub := events.NewHub()
 	metrics := telemetry.NewMetrics()
 	static, _ := fs.Sub(api.StaticFiles(), "static")
-	srv := api.NewServer(cfg, st, gate, nil, hub, metrics, slog.Default(), static)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	var closers []func()
+	var st store.RunStore = store.NewMemoryRunStore(cfg.MaxRetainedRuns)
+	var opts []api.Option
+	if cfg.UseAsynq() && r != roleRun {
+		bridge, err := cluster.New(cfg.RedisURL, slog.Default())
+		if err != nil {
+			log.Fatal(err)
+		}
+		closers = append(closers, func() { _ = bridge.Close() })
+		st = store.NewRedisRunStore(bridge.Client(), cfg.MaxRetainedRuns, slog.Default())
+		switch r {
+		case roleServe:
+			if err := bridge.RelayToHub(ctx, hub); err != nil {
+				log.Fatal(err)
+			}
+			opts = append(opts, api.WithApprovalResolver(bridge))
+		case roleWorker:
+			bridge.ForwardHub(ctx, hub)
+			if err := bridge.AttachGate(ctx, gate); err != nil {
+				log.Fatal(err)
+			}
+		}
+	}
+
+	srv := api.NewServer(cfg, st, gate, nil, hub, metrics, slog.Default(), static, opts...)
 	q, err := queue.NewEnqueuer(cfg, func(ctx context.Context, p queue.RunPayload) error {
 		return srv.ProcessQueuePayload(ctx, p)
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
+	if c, ok := q.(*queue.AsynqQueue); ok {
+		closers = append(closers, func() { _ = c.Close() })
+	}
 	srv.SetQueue(q)
-	return srv, q, hub, metrics
+	return &app{srv: srv, queue: q, close: func() {
+		cancel()
+		for _, c := range closers {
+			c()
+		}
+	}}
 }
 
 func runServe(args []string) {
@@ -85,10 +134,9 @@ func runServe(args []string) {
 		cfg.HTTPAddr = ":" + p
 	}
 
-	srv, q, _, metrics := newApp(cfg)
-	if c, ok := q.(*queue.AsynqQueue); ok {
-		defer c.Close()
-	}
+	a := newApp(cfg, roleServe)
+	defer a.close()
+	srv, q := a.srv, a.queue
 
 	// No Read/WriteTimeout: SSE streams and synchronous runs are long-lived, and
 	// ReadTimeout would cancel their request contexts. Bodies are capped per handler.
@@ -120,7 +168,6 @@ func runServe(args []string) {
 		slog.Warn("aegis_shutdown", "detail", "in-flight runs cancelled", "err", err)
 	}
 	crawl.CloseBrowser()
-	_ = metrics
 }
 
 func runWorker(args []string) {
@@ -129,13 +176,16 @@ func runWorker(args []string) {
 	if !cfg.UseAsynq() {
 		log.Fatal("set AEGIS_QUEUE_MODE=asynq to run worker")
 	}
-	srv, _, _, _ := newApp(cfg)
-	server, mux, err := queue.NewWorkerServer(cfg, srv.ProcessQueuePayload)
+	a := newApp(cfg, roleWorker)
+	server, mux, err := queue.NewWorkerServer(cfg, a.srv.ProcessQueuePayload)
 	if err != nil {
 		log.Fatal(err)
 	}
 	slog.Info("aegis_worker_start", "redis", cfg.RedisURL)
-	if err := server.Run(mux); err != nil {
+	err = server.Run(mux)
+	crawl.CloseBrowser()
+	a.close()
+	if err != nil {
 		log.Fatal(err)
 	}
 }
@@ -147,7 +197,9 @@ func runOnce(args []string) {
 	_ = fs.Parse(args)
 
 	cfg := config.Load()
-	srv, _, _, _ := newApp(cfg)
+	a := newApp(cfg, roleRun)
+	defer a.close()
+	srv := a.srv
 
 	runTimeout := cfg.RunTimeout
 	if runTimeout <= 0 {

@@ -13,32 +13,56 @@ type Event struct {
 	Message string `json:"message,omitempty"`
 }
 
-// Hub broadcasts events to SSE clients.
+// Hub broadcasts events to SSE clients and, optionally, to another process.
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[chan []byte]struct{}
+	mu        sync.RWMutex
+	clients   map[chan []byte]struct{}
+	forwarder func([]byte)
 }
 
 func NewHub() *Hub {
 	return &Hub{clients: make(map[chan []byte]struct{})}
 }
 
+// SetForwarder receives every published event (e.g. to relay worker events to
+// the API process). It must not block.
+func (h *Hub) SetForwarder(f func([]byte)) {
+	h.mu.Lock()
+	h.forwarder = f
+	h.mu.Unlock()
+}
+
 func (h *Hub) Publish(ev Event) {
 	h.mu.RLock()
-	if len(h.clients) == 0 {
-		h.mu.RUnlock()
+	idle := len(h.clients) == 0 && h.forwarder == nil
+	h.mu.RUnlock()
+	if idle {
 		return
 	}
-	h.mu.RUnlock()
 	data, _ := json.Marshal(ev)
 	h.mu.RLock()
+	fwd := h.forwarder
+	h.broadcastLocked(data)
+	h.mu.RUnlock()
+	if fwd != nil {
+		fwd(data)
+	}
+}
+
+// Broadcast delivers an already-encoded event to local clients only (no forwarding).
+func (h *Hub) Broadcast(data []byte) {
+	h.mu.RLock()
+	h.broadcastLocked(data)
+	h.mu.RUnlock()
+}
+
+func (h *Hub) broadcastLocked(data []byte) {
 	for ch := range h.clients {
 		select {
 		case ch <- data:
 		default:
 		}
 	}
-	h.mu.RUnlock()
 }
 
 func (h *Hub) Subscribe() (chan []byte, func()) {

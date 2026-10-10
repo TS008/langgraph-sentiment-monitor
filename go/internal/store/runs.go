@@ -10,6 +10,29 @@ import (
 // DefaultMaxRuns bounds retained results when no explicit limit is configured.
 const DefaultMaxRuns = 200
 
+// RunStore persists run results. MemoryRunStore serves a single process;
+// RedisRunStore shares results between the API and asynq workers.
+type RunStore interface {
+	Put(r pipeline.RunResult)
+	Get(id string) (pipeline.RunResult, bool)
+	// List returns up to limit summaries, newest first (limit <= 0: all retained).
+	List(limit int) []RunSummary
+	Len() int
+}
+
+func summarize(r pipeline.RunResult) RunSummary {
+	return RunSummary{
+		ID:          r.ID,
+		Status:      r.Status,
+		Checkpoint:  r.Checkpoint,
+		StartedAt:   r.StartedAt,
+		FinishedAt:  r.FinishedAt,
+		RiskScore:   r.Sentiment.RiskScore,
+		SignalCount: len(r.Signals),
+		Error:       r.Error,
+	}
+}
+
 // MemoryRunStore keeps the most recent pipeline results in-process (MVP).
 // When over capacity it evicts the oldest finished runs; in-flight runs are kept.
 type MemoryRunStore struct {
@@ -82,7 +105,6 @@ func (s *MemoryRunStore) Len() int {
 	return len(s.runs)
 }
 
-// List returns up to limit summaries, newest first. limit <= 0 means all retained runs.
 func (s *MemoryRunStore) List(limit int) []RunSummary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -92,17 +114,7 @@ func (s *MemoryRunStore) List(limit int) []RunSummary {
 	}
 	out := make([]RunSummary, 0, limit)
 	for i := n - 1; i >= 0 && len(out) < limit; i-- {
-		r := s.runs[s.order[i]]
-		out = append(out, RunSummary{
-			ID:          r.ID,
-			Status:      r.Status,
-			Checkpoint:  r.Checkpoint,
-			StartedAt:   r.StartedAt,
-			FinishedAt:  r.FinishedAt,
-			RiskScore:   r.Sentiment.RiskScore,
-			SignalCount: len(r.Signals),
-			Error:       r.Error,
-		})
+		out = append(out, summarize(s.runs[s.order[i]]))
 	}
 	return out
 }

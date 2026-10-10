@@ -19,6 +19,17 @@ type Gate struct {
 	timeout time.Duration
 	mu      sync.Mutex
 	pending map[string]chan Decision
+
+	onPending func(id string, timeout time.Duration)
+	onDone    func(id string)
+}
+
+// SetHooks observes requests becoming pending and leaving the pending set (resolved,
+// timed out or cancelled), e.g. to advertise them to another process. Set before use.
+func (g *Gate) SetHooks(onPending func(id string, timeout time.Duration), onDone func(id string)) {
+	g.mu.Lock()
+	g.onPending, g.onDone = onPending, onDone
+	g.mu.Unlock()
 }
 
 func NewGate(timeout time.Duration) *Gate {
@@ -33,12 +44,19 @@ func (g *Gate) Request(ctx context.Context, requestID string, summary string) De
 	ch := make(chan Decision, 1)
 	g.mu.Lock()
 	g.pending[requestID] = ch
+	onPending, onDone := g.onPending, g.onDone
 	g.mu.Unlock()
+	if onPending != nil {
+		onPending(requestID, g.timeout)
+	}
 
 	defer func() {
 		g.mu.Lock()
 		delete(g.pending, requestID)
 		g.mu.Unlock()
+		if onDone != nil {
+			onDone(requestID)
+		}
 	}()
 
 	timer := time.NewTimer(g.timeout)
@@ -62,6 +80,14 @@ func (g *Gate) Request(ctx context.Context, requestID string, summary string) De
 			At:       time.Now().UTC(),
 		}
 	}
+}
+
+// Resolve approves or rejects a pending request; false if it is not pending here.
+func (g *Gate) Resolve(_ context.Context, requestID string, approved bool, note string) (bool, error) {
+	if approved {
+		return g.Approve(requestID, note), nil
+	}
+	return g.Reject(requestID, note), nil
 }
 
 // Approve resolves a pending request (HTTP hook for future commander UI).
