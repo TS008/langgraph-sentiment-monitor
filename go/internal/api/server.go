@@ -19,6 +19,7 @@ import (
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/approval"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/config"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/events"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/netguard"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/pipeline"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/queue"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/store"
@@ -45,6 +46,7 @@ type Server struct {
 	logger  *slog.Logger
 	static  fs.FS
 
+	fetchPolicy  netguard.Policy
 	runSem       chan struct{}
 	sseHeartbeat time.Duration
 	streamsDone  chan struct{}
@@ -97,8 +99,10 @@ func NewServer(
 	if maxRuns < 1 {
 		maxRuns = 1
 	}
+	policy, _ := cfg.FetchPolicy()
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	srv := &Server{
+		fetchPolicy:  policy,
 		cfg:          cfg,
 		store:        st,
 		gate:         gate,
@@ -266,6 +270,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	if req.HTMLURL != "" {
+		if _, err := s.fetchPolicy.ValidateURL(r.Context(), req.HTMLURL); err != nil {
+			http.Error(w, "html_url rejected: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	runID := pipeline.NewRunID()

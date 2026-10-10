@@ -2,11 +2,16 @@ package crawl
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/netguard"
 )
 
 // MaxJSRenderTabs bounds concurrent headless tabs; each costs tens of MB.
@@ -49,9 +54,15 @@ func CloseBrowser() {
 	}
 }
 
-// FetchHTMLJS renders JS-heavy pages with headless Chrome (chromedp).
-func FetchHTMLJS(ctx context.Context, pageURL string) (Signal, error) {
+// FetchHTMLJS renders JS-heavy pages with headless Chrome (chromedp). Every request
+// the tab makes (navigation, redirects, subresources, fetch/XHR) is checked against
+// policy. Chrome resolves DNS itself, so a rebinding race between our lookup and
+// Chrome's remains possible; the colly path is not affected by this.
+func FetchHTMLJS(ctx context.Context, pageURL string, policy netguard.Policy) (Signal, error) {
 	if err := ctx.Err(); err != nil {
+		return Signal{}, err
+	}
+	if _, err := policy.ValidateURL(ctx, pageURL); err != nil {
 		return Signal{}, err
 	}
 	select {
@@ -74,12 +85,17 @@ func FetchHTMLJS(ctx context.Context, pageURL string) (Signal, error) {
 	stop := context.AfterFunc(ctx, cancelTab)
 	defer stop()
 
+	var tasks chromedp.Tasks
+	if !policy.AllowPrivate {
+		guardRequests(tabCtx, policy)
+		tasks = append(tasks, fetch.Enable())
+	}
 	var title, body string
-	tasks := chromedp.Tasks{
+	tasks = append(tasks,
 		chromedp.Navigate(pageURL),
 		chromedp.Title(&title),
 		chromedp.Evaluate(`document.body ? document.body.innerText : ""`, &body),
-	}
+	)
 	if err := chromedp.Run(tabCtx, tasks); err != nil {
 		if ctx.Err() != nil {
 			return Signal{}, ctx.Err()
@@ -94,4 +110,37 @@ func FetchHTMLJS(ctx context.Context, pageURL string) (Signal, error) {
 		Snippet: truncate(body, 500),
 		Fetched: time.Now().UTC(),
 	}, nil
+}
+
+// guardRequests pauses each request via the Fetch domain and fails those whose
+// host resolves to a blocked network. Non-network schemes (data:, blob:) pass.
+func guardRequests(tabCtx context.Context, policy netguard.Policy) {
+	chromedp.ListenTarget(tabCtx, func(ev interface{}) {
+		e, ok := ev.(*fetch.EventRequestPaused)
+		if !ok {
+			return
+		}
+		// Handlers must not block the event loop; CDP calls go on their own goroutine.
+		go func() {
+			execCtx := cdp.WithExecutor(tabCtx, chromedp.FromContext(tabCtx).Target)
+			if requestAllowed(tabCtx, policy, e.Request.URL) {
+				_ = fetch.ContinueRequest(e.RequestID).Do(execCtx)
+				return
+			}
+			_ = fetch.FailRequest(e.RequestID, network.ErrorReasonBlockedByClient).Do(execCtx)
+		}()
+	})
+}
+
+func requestAllowed(ctx context.Context, policy netguard.Policy, raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "data", "blob", "about":
+		return true
+	}
+	_, err = policy.ValidateURL(ctx, raw)
+	return err == nil
 }

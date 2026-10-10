@@ -3,6 +3,7 @@ module github.com/ts008/langgraph-sentiment-monitor/go
 go 1.24.0
 
 require (
+	github.com/chromedp/cdproto v0.0.0-20241022234722-4d5d5faf59fb
 	github.com/chromedp/chromedp v0.11.2
 	github.com/go-chi/chi/v5 v5.2.1
 	github.com/gocolly/colly/v2 v2.2.0
@@ -23,7 +24,6 @@ require (
 	github.com/antchfx/xpath v1.3.3 // indirect
 	github.com/bits-and-blooms/bitset v1.22.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/chromedp/cdproto v0.0.0-20241022234722-4d5d5faf59fb // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/gobwas/glob v0.2.3 // indirect

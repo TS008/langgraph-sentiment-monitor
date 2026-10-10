@@ -10,6 +10,7 @@ import (
 
 	"github.com/gocolly/colly/v2"
 	"github.com/mmcdole/gofeed"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/netguard"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/textutil"
 	"golang.org/x/time/rate"
 )
@@ -26,13 +27,17 @@ type Signal struct {
 }
 
 // Ingestor fetches RSS and optional HTML pages with rate limits and parallelism.
+// RSS feeds come from operator config; HTML pages may be user-supplied and go
+// through the SSRF policy.
 type Ingestor struct {
 	parallelism int
 	limiter     *rate.Limiter
 	client      *http.Client
+	policy      netguard.Policy
+	pageRT      http.RoundTripper
 }
 
-func NewIngestor(parallelism int) *Ingestor {
+func NewIngestor(parallelism int, policy netguard.Policy) *Ingestor {
 	if parallelism < 1 {
 		parallelism = 1
 	}
@@ -40,6 +45,8 @@ func NewIngestor(parallelism int) *Ingestor {
 		parallelism: parallelism,
 		limiter:     rate.NewLimiter(rate.Every(200*time.Millisecond), parallelism),
 		client:      &http.Client{Timeout: 30 * time.Second},
+		policy:      policy,
+		pageRT:      policy.Transport(),
 	}
 }
 
@@ -109,8 +116,11 @@ func (i *Ingestor) FetchRSS(ctx context.Context, feedURLs []string) ([]Signal, e
 
 // FetchPage fetches HTML with colly or chromedp when useJS is true.
 func (i *Ingestor) FetchPage(ctx context.Context, pageURL string, useJS bool) (Signal, error) {
+	if _, err := i.policy.ValidateURL(ctx, pageURL); err != nil {
+		return Signal{}, err
+	}
 	if useJS {
-		return FetchHTMLJS(ctx, pageURL)
+		return FetchHTMLJS(ctx, pageURL, i.policy)
 	}
 	return i.FetchHTML(ctx, pageURL)
 }
@@ -131,6 +141,7 @@ func (i *Ingestor) FetchHTML(ctx context.Context, pageURL string) (Signal, error
 	c := colly.NewCollector(
 		colly.UserAgent("AEGIS-Monitor/1.0 (+https://github.com/ts008/langgraph-sentiment-monitor)"),
 	)
+	c.WithTransport(i.pageRT)
 	c.SetRequestTimeout(25 * time.Second)
 	c.Limit(&colly.LimitRule{
 		DomainGlob:  "*",

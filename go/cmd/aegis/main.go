@@ -53,6 +53,9 @@ func usage() {
 }
 
 func newApp(cfg config.Config) (*api.Server, queue.Enqueuer, *events.Hub, *telemetry.Metrics) {
+	if _, err := cfg.FetchPolicy(); err != nil {
+		log.Fatal(err)
+	}
 	st := store.NewMemoryRunStore(cfg.MaxRetainedRuns)
 	gate := approval.NewGate(cfg.ApprovalTimeout)
 	hub := events.NewHub()
