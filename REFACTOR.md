@@ -32,18 +32,30 @@ Without these, OpenCode returns `400 MissingSessionID`. No extra env vars are ne
 
 Heuristic/offline fallback runs when the key is missing or the API returns 401/403.
 
-## Architecture
+## Multi-agent architecture (v2)
+
+Crisis handling is a **typed event bus** + **scoped case file** + **RBAC**, not agent-to-agent LLM chat.
+
+| Package | Role |
+|---------|------|
+| `internal/agentbus` | In-process mailbox per run. Envelopes: `task`, `handoff`, `artifact`, `decision`, `audit`. |
+| `internal/casefile` | Run-scoped artifacts (signals, sentiment, …) with **role-scoped reads** and **checkpoint** per stage. |
+| `internal/rbac` | Deny-by-default tools (`crawl_public`, `llm_infer`, `external_dispatch`, …) per agent role. |
+| `internal/agents` | Runtime helpers: publish handoffs, record audit. |
+| `internal/pipeline` | `Orchestrator` drives legacy stage names via bus messages; `Runner` is the public API. |
+
+**Context discipline:** agents receive `HandoffSummary` + artifact refs from the case file (not full bus history). LLM prompts use bounded slices.
+
+**Approval:** `decision_gateway` + human commander (or timeout) before `action_coordinator` may use `external_dispatch`.
+
+**Demo:** `go run ./cmd/aegis run` prints `agent_messages` and `audit_log` JSON. Commander UI shows bus + audit over SSE (`agent_message`, `audit` events).
 
 ```
-Social registry (RSS live, X/Weibo stubs)
-  → sentiment_sentinel (ingest)
-  → sentiment_analysis → technical_diagnostician → pr_strategist → legal_counsel
-  → decision_gateway (approve/reject or timeout auto-approve)
-  → action_coordinator (stub) → realtime_sentiment_feedback
-  → crisis_status_check → post_mortem_analyst
+Orchestrator --task--> sentiment_sentinel --handoff--> … --> post_mortem_analyst
+                 \___ casefile artifacts (by ref) ___/
 ```
 
-Optional **chromedp** fetch for a single HTML URL. Optional **asynq** worker for async runs.
+Optional **chromedp** fetch for a single HTML URL. Optional **asynq** worker for async runs (same orchestrator; bus stays in-process on the worker).
 
 ## Run
 
@@ -54,9 +66,16 @@ cd go
 cp ../.env.example ../.env   # set OPENCODE_GO_API_KEY locally only
 go mod tidy
 go build ./...
+go test ./...                # fast, offline unit tests (no network)
 
-go run ./cmd/aegis run              # CLI, no key → heuristic fallback
+go run ./cmd/aegis run              # CLI, no key → heuristic fallback (default 900s run cap)
 go run ./cmd/aegis serve            # API + commander UI at http://localhost:8080/commander
+```
+
+**Integration tests** (optional, network + optional API key):
+
+```bash
+AEGIS_INTEGRATION=1 go test -tags=integration ./internal/pipeline -run Live -timeout 5m
 ```
 
 ### Commander UI

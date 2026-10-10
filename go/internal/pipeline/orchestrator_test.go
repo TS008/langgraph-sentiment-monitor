@@ -8,20 +8,46 @@ import (
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/agentbus"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/approval"
 	"github.com/ts008/langgraph-sentiment-monitor/go/internal/config"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/crawl"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/llm"
+	"github.com/ts008/langgraph-sentiment-monitor/go/internal/social"
 )
 
 func TestOrchestratorPublishesTypedHandoffs(t *testing.T) {
-	cfg := config.Load()
-	cfg.ApprovalTimeout = 1 * time.Millisecond
+	cfg := config.Config{
+		ApprovalTimeout: time.Millisecond,
+		LLMTimeout:      5 * time.Second,
+	}
+	signals := []crawl.Signal{{
+		Source:  "fixture",
+		URL:     "https://example.test/incident",
+		Title:   "Test outage",
+		Snippet: "users report login failure",
+		Fetched: time.Now().UTC(),
+	}}
+	reg := &social.Registry{
+		Sources: []social.Source{&social.FixtureSource{Signals: signals}},
+	}
 	bus := agentbus.NewBus()
-	orch := NewOrchestrator(cfg, approval.NewGate(cfg.ApprovalTimeout), nil, bus, nil, nil)
+	orch := NewOrchestrator(
+		cfg,
+		approval.NewGate(cfg.ApprovalTimeout),
+		nil,
+		bus,
+		nil,
+		nil,
+		&OrchestratorDeps{
+			Completor: llm.NewStubCompletor(),
+			Social:    reg,
+		},
+	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
-	res := orch.Execute(ctx, RunOptions{}, nil)
-	if res.Error != "" && res.Status == "failed" && len(res.Signals) == 0 {
-		t.Skip("network ingest unavailable in CI")
+	res := orch.Execute(context.Background(), RunOptions{}, nil)
+	if res.Status != "completed" {
+		t.Fatalf("status=%s err=%s", res.Status, res.Error)
+	}
+	if len(res.Signals) != 1 {
+		t.Fatalf("signals %d", len(res.Signals))
 	}
 
 	handoffs := bus.Filter(res.ID, agentbus.KindHandoff, "")

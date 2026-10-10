@@ -23,7 +23,7 @@ type Orchestrator struct {
 	cfg      config.Config
 	ingestor *crawl.Ingestor
 	social   *social.Registry
-	llm      *llm.Client
+	llm      llm.Completor
 	gate     *approval.Gate
 	metrics  *telemetry.Metrics
 	bus      *agentbus.Bus
@@ -31,7 +31,7 @@ type Orchestrator struct {
 	audit    *rbac.AuditLog
 }
 
-func NewOrchestrator(cfg config.Config, gate *approval.Gate, metrics *telemetry.Metrics, bus *agentbus.Bus, cases *casefile.Store, audit *rbac.AuditLog) *Orchestrator {
+func NewOrchestrator(cfg config.Config, gate *approval.Gate, metrics *telemetry.Metrics, bus *agentbus.Bus, cases *casefile.Store, audit *rbac.AuditLog, deps *OrchestratorDeps) *Orchestrator {
 	ing := crawl.NewIngestor(cfg.CrawlParallelism)
 	reg := &social.Registry{
 		Sources: []social.Source{
@@ -49,8 +49,17 @@ func NewOrchestrator(cfg config.Config, gate *approval.Gate, metrics *telemetry.
 	if audit == nil {
 		audit = rbac.NewAuditLog()
 	}
+	completor := llm.Completor(llm.New(cfg))
+	if deps != nil {
+		if deps.Social != nil {
+			reg = deps.Social
+		}
+		if deps.Completor != nil {
+			completor = deps.Completor
+		}
+	}
 	return &Orchestrator{
-		cfg: cfg, ingestor: ing, social: reg, llm: llm.New(cfg),
+		cfg: cfg, ingestor: ing, social: reg, llm: completor,
 		gate: gate, metrics: metrics, bus: bus, cases: cases, audit: audit,
 	}
 }

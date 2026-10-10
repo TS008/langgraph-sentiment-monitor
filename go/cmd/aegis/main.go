@@ -132,7 +132,11 @@ func runOnce(args []string) {
 	cfg := config.Load()
 	srv, _, _, _ := newApp(cfg)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	runTimeout := cfg.RunTimeout
+	if runTimeout <= 0 {
+		runTimeout = 15 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
 
 	res := srv.RunOnce(ctx, *url, *js || cfg.UseJSRender)

@@ -29,6 +29,7 @@ type Config struct {
 	CrawlParallelism int
 	UseJSRender      bool
 	LLMTimeout       time.Duration
+	RunTimeout       time.Duration
 	ApprovalTimeout  time.Duration
 }
 
@@ -44,7 +45,8 @@ func Load() Config {
 		QueueMode:  strings.ToLower(envOr("AEGIS_QUEUE_MODE", "memory")),
 		CrawlParallelism: envInt("AEGIS_CRAWL_PARALLELISM", 4),
 		UseJSRender:      envBool("AEGIS_CRAWL_JS_RENDER", false),
-		LLMTimeout:       time.Duration(envInt("AEGIS_LLM_TIMEOUT_SEC", 60)) * time.Second,
+		LLMTimeout:       time.Duration(envInt("AEGIS_LLM_TIMEOUT_SEC", 120)) * time.Second,
+		RunTimeout:       time.Duration(envInt("AEGIS_RUN_TIMEOUT_SEC", 900)) * time.Second,
 		ApprovalTimeout:  time.Duration(envInt("AEGIS_APPROVAL_TIMEOUT_SEC", 5)) * time.Second,
 	}
 

@@ -80,7 +80,7 @@ type Runner struct {
 func NewRunner(cfg config.Config, gate *approval.Gate, metrics *telemetry.Metrics) *Runner {
 	bus := agentbus.NewBus()
 	return &Runner{
-		orch: NewOrchestrator(cfg, gate, metrics, bus, nil, nil),
+		orch: NewOrchestrator(cfg, gate, metrics, bus, nil, nil, nil),
 	}
 }
 
